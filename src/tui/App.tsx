@@ -33,6 +33,8 @@ export interface AppProps extends TuiActionHandlers {
   totalSessions?: number;
   syncStatus?: SyncStatus;
   warning?: string | null;
+  emptyStateMessage?: string;
+  refreshToken?: number;
   resolveWarnings?: (result: SearchResult | null) => readonly string[];
 }
 
@@ -56,6 +58,7 @@ export function App(props: AppProps) {
     ...(props.initialQuery !== undefined ? { initialQuery: props.initialQuery } : {}),
     ...(props.currentCwd ? { currentCwd: props.currentCwd } : {}),
     ...(props.currentRepo !== undefined ? { currentRepo: props.currentRepo } : {}),
+    ...(props.refreshToken !== undefined ? { refreshToken: props.refreshToken } : {}),
   });
   const selection = useSelection(search.results);
   const previewWarnings = useMemo(() => {
@@ -158,9 +161,10 @@ export function App(props: AppProps) {
       {search.results.length === 0 && search.status === 'ready' ? (
         <Box marginTop={1}>
           <Text dimColor>
-            {search.query.trim().length === 0
-              ? 'Start typing or browse recent sessions.'
-              : 'No sessions matched the current query.'}
+            {props.emptyStateMessage
+              ?? (search.query.trim().length === 0
+                ? 'Start typing or browse recent sessions.'
+                : 'No sessions matched the current query.')}
           </Text>
         </Box>
       ) : null}

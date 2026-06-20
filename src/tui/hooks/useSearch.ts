@@ -13,6 +13,7 @@ export interface UseSearchOptions {
   currentRepo?: string | null;
   debounceMs?: number;
   defaultIncludeSubagents?: boolean;
+  refreshToken?: number;
 }
 
 export interface UseSearchState {
@@ -55,7 +56,16 @@ export function useSearch(options: UseSearchOptions): UseSearchState {
     return () => {
       clearTimeout(timer);
     };
-  }, [options.currentCwd, options.currentRepo, options.debounceMs, options.limit, options.service, parsedQuery, query]);
+  }, [
+    options.currentCwd,
+    options.currentRepo,
+    options.debounceMs,
+    options.limit,
+    options.refreshToken,
+    options.service,
+    parsedQuery,
+    query,
+  ]);
 
   return {
     query,

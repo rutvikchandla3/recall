@@ -1,11 +1,12 @@
 import { render } from 'ink';
+import { ensureConfigScaffoldFile } from '../core/config.js';
 import { openDatabase, closeDatabase, createSessionsRepo } from '../db/index.js';
 import { copyToClipboard } from '../launch/clipboard.js';
 import { openTranscript } from '../launch/transcript.js';
 import { validateLaunchTarget } from '../launch/validate.js';
 import { createRepoResolver } from '../index/normalize.js';
 import { createSqliteSearchService } from '../search/sqlite.js';
-import { App } from '../tui/App.js';
+import { BootstrapController } from '../tui/BootstrapController.js';
 
 export interface TuiCommandOptions {
   query?: string;
@@ -13,6 +14,7 @@ export interface TuiCommandOptions {
 }
 
 export async function runTuiCommand(options: TuiCommandOptions = {}): Promise<void> {
+  const { config } = await ensureConfigScaffoldFile();
   const db = await openDatabase({ runMigrations: true });
   const sessionsRepo = createSessionsRepo(db);
   const totalSessionsRow = db.prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM sessions').get();
@@ -23,13 +25,15 @@ export async function runTuiCommand(options: TuiCommandOptions = {}): Promise<vo
   const service = createSqliteSearchService(db);
 
   const app = render(
-    <App
+    <BootstrapController
+      db={db}
       service={service}
       {...(options.query !== undefined ? { initialQuery: options.query } : {})}
       limit={options.limit ?? 20}
       currentCwd={currentCwd}
       currentRepo={currentRepo}
-      totalSessions={totalSessions}
+      initialTotalSessions={totalSessions}
+      backgroundSyncOnLaunch={config.indexing.backgroundSyncOnLaunch}
       onResume={async (result) => {
         const validation = await validateLaunchTarget(result.provider, result.cwd);
         await copyToClipboard(result.resumeCmd);

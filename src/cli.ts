@@ -32,7 +32,8 @@ program
   .command('sync')
   .option('--provider <provider>', 'scope sync to a single provider')
   .option('--quiet', 'suppress progress logging')
-  .action(async (options: { provider?: ProviderId; quiet?: boolean }) => {
+  .option('--json', 'print JSON output')
+  .action(async (options: { provider?: ProviderId; quiet?: boolean; json?: boolean }) => {
     await runSyncCommand(options);
   });
 

@@ -32,6 +32,19 @@ Early MVP focused on local session stores for:
 - Codex
 - pi
 
+## Install
+
+```bash
+npm install -g coding-agent-recall
+recall
+```
+
+Or without installing globally:
+
+```bash
+npx coding-agent-recall
+```
+
 ## Run locally
 
 ```bash
@@ -40,13 +53,22 @@ pnpm build
 pnpm dev
 ```
 
+On first launch, Recall now:
+- creates `~/.config/recall/config.json`
+- creates its local SQLite index under `~/.local/share/recall/`
+- auto-discovers Claude, Codex, and pi session roots
+- starts indexing in the background
+
+`npm install` itself does **not** scan or index your machine. Indexing starts on first `recall` launch.
+
 ## Commands
 
 ```bash
-recall
+recall                    # first launch auto-bootstraps + starts indexing
 recall search "voyage embeddings"
 recall index
 recall sync
+recall doctor
 ```
 
 For deeper product and implementation details, see [`PRD.md`](./PRD.md) and [`IMPLEMENTATION.md`](./IMPLEMENTATION.md).

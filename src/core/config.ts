@@ -1,4 +1,4 @@
-import { chmod, readFile, writeFile } from 'node:fs/promises';
+import { access, chmod, readFile, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { ConfigError } from './errors.js';
 import { getEnv, getEnvBoolean } from './env.js';
@@ -141,4 +141,30 @@ export async function ensureConfigFile(): Promise<{ config: RecallConfig; path: 
   await chmod(paths.configPath, 0o600);
 
   return { config, path: paths.configPath };
+}
+
+export async function ensureConfigScaffoldFile(): Promise<{ config: RecallConfig; path: string }> {
+  const config = await loadConfig();
+  const paths = resolvePaths(config.paths);
+
+  await ensureDir(paths.configDir);
+
+  try {
+    await access(paths.configPath);
+    return { config, path: paths.configPath };
+  } catch {
+    const scaffold: RecallConfig = {
+      ...config,
+      embeddings: {
+        ...config.embeddings,
+      },
+    };
+
+    delete scaffold.embeddings.apiKey;
+
+    await writeFile(paths.configPath, `${JSON.stringify(scaffold, null, 2)}\n`, 'utf8');
+    await chmod(paths.configPath, 0o600);
+
+    return { config, path: paths.configPath };
+  }
 }
