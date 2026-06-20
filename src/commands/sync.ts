@@ -1,5 +1,6 @@
 import { runSync } from '../index/sync.js';
 import type { ProviderId } from '../domain/session.js';
+import { printSemanticSearchHint } from './semantic-status.js';
 
 export interface SyncCommandOptions {
   provider?: ProviderId;
@@ -20,4 +21,5 @@ export async function runSyncCommand(options: SyncCommandOptions = {}): Promise<
 
   console.log(`Sync complete: ${summary.indexed} indexed / ${summary.changed} changed / ${summary.discovered} discovered / ${summary.failed} failures.`);
   console.log(`Semantic index: ${summary.chunkedSessions} sessions chunked, ${summary.chunks} chunks, ${summary.embeddedChunks} embedded (${summary.reusedEmbeddings} reused, ${summary.embeddingFailures} failures).`);
+  printSemanticSearchHint(summary);
 }

@@ -17,7 +17,7 @@ You run 40–50 coding agents a day across Claude Code, Codex, and pi. Today the
 3. Shows a **dropdown TUI** with provider badge, repo/branch, time, and the matching snippet.
 4. On select, **prints + copies the exact resume command** (`cd <cwd> && claude --resume <id>`) so you paste and you're back in that conversation.
 
-**v1 scope (decided):** TypeScript + Ink · hybrid search (Voyage + FTS5) · print/copy resume · local providers only (Claude CLI+IDE, Codex, pi). Cloud agents and exec-handoff are Phase 2+.
+**v1 scope (decided):** TypeScript + Ink · hybrid search (local embeddings by default, optional Voyage + FTS5) · print/copy resume · local providers only (Claude CLI+IDE, Codex, pi). Cloud agents and exec-handoff are Phase 2+.
 
 ---
 
@@ -147,7 +147,7 @@ $ recall
 ### 6.2 Search & ranking (hybrid)
 - **FR-8** Two retrievers run in parallel:
   - **Keyword:** SQLite **FTS5** (BM25) over `title` (weight ×3), `first_prompt` (×2), `body`.
-  - **Semantic:** embed the query (Voyage) → **sqlite-vec** KNN over chunk vectors → aggregate to session via max-chunk similarity.
+  - **Semantic:** embed the query (local Ollama by default, optional Voyage) → **sqlite-vec** KNN over chunk vectors → aggregate to session via max-chunk similarity.
 - **FR-9** Fuse the two ranked lists with **Reciprocal Rank Fusion**, then apply boosts:
   - recency (exponential decay), `repo == current cwd` boost, exact-title-substring boost, penalty for `is_subagent` and for very short sessions.
 - **FR-10** Return top-N with the **best-matching snippet** (FTS-highlighted span or nearest chunk text) for the preview.
@@ -181,7 +181,7 @@ $ recall
 
 ## 7. Architecture
 
-**Stack:** Node + TypeScript · **Ink** (TUI) · **better-sqlite3** (sync, fast) · **sqlite-vec** (loadable vector extension) · **Voyage** SDK (embeddings) · **chokidar** (watch) · **clipboardy** (copy).
+**Stack:** Node + TypeScript · **Ink** (TUI) · **better-sqlite3** (sync, fast) · **sqlite-vec** (loadable vector extension) · local Ollama embeddings by default, optional **Voyage** · **chokidar** (watch) · **clipboardy** (copy).
 
 ```
                         ┌────────────────────────────────────────┐
@@ -261,7 +261,7 @@ CREATE VIRTUAL TABLE sessions_fts USING fts5(   -- keyword retriever
 
 CREATE TABLE chunks (id INTEGER PRIMARY KEY, uid TEXT, ord INT, text TEXT);
 CREATE VIRTUAL TABLE chunks_vec USING vec0(      -- semantic retriever
-  embedding float[1024]);                          -- voyage-code-3 dims
+  embedding float[768]);                           -- default local embeddinggemma dims
 
 CREATE TABLE manifest (path TEXT PRIMARY KEY, size INT, mtime INT, hash TEXT, indexed_at TEXT);
 CREATE TABLE embed_cache (hash TEXT PRIMARY KEY, embedding BLOB);  -- avoid re-embedding
@@ -303,10 +303,10 @@ interface SessionAdapter {
 
 ## 11. Privacy & Security
 
-- **Local-first:** all parsing, storage, and keyword search are on-device. The **only** egress is text sent to **Voyage** for embeddings (chunks at index time, queries at search time).
-- **Sensitive content:** transcripts can contain secrets/keys. Mitigations: (a) configurable **redaction** pass before embedding, (b) a **fully-offline mode** using a local embedding model (e.g. `fastembed`/transformers.js) as a Phase-2 fallback, (c) never embed obvious secret patterns.
-- **Keys:** Voyage key from env/config, never logged; DB and config are `0600`.
-- **No background phone-home** beyond the embedding API you configure.
+- **Local-first:** all parsing, storage, keyword search, and default embeddings are on-device. Hosted embedding egress only happens if the user selects **Voyage** explicitly or already has `VOYAGE_API_KEY` in the environment.
+- **Sensitive content:** transcripts can contain secrets/keys. Mitigations: (a) local embeddings by default, (b) configurable **redaction** pass before embedding, (c) never embed obvious secret patterns.
+- **Keys:** Voyage key from env/config when Voyage is selected, never logged; DB and config are `0600`.
+- **No background phone-home** beyond the embedding provider you configure.
 
 ---
 
@@ -318,7 +318,7 @@ interface SessionAdapter {
 - Goal: prove we can cleanly extract title/cwd/text/resume-cmd for all three. **Exit:** keyword search returns correct sessions across tools.
 
 ### Phase 1 — MVP (the shippable v1)
-- Add Voyage embeddings + sqlite-vec + hybrid RRF ranking + boosts.
+- Add local-first embeddings (Ollama `embeddinggemma` by default), optional Voyage, sqlite-vec, and hybrid RRF ranking + boosts.
 - Ink TUI: live search, result list, preview pane, print/copy resume.
 - Incremental sync on launch; subagent filtering; inline filters.
 - **Exit:** "where did I build X" reliably surfaces the right session in top-5, copyable in one keystroke.
@@ -326,7 +326,7 @@ interface SessionAdapter {
 ### Phase 2 — Daily-driver polish
 - `recall watch` daemon (chokidar) for near-instant freshness.
 - Transcript preview/pager, fork action, richer facets, fuzzy repo filter.
-- Offline local-embedding fallback + redaction.
+- Better model setup UX, additional local backends, and redaction tuning.
 
 ### Phase 3 — Reach
 - **claude.ai cloud** adapter (API/daemon) for remote agents.
@@ -343,7 +343,7 @@ interface SessionAdapter {
 | Format drift (pi already has 2 layouts; codex index stale) | parsing breaks | defensive parsing, adapter version tags, fixture tests per format |
 | Subagent/telemetry noise (pi board/view, codex subagents, 288MB sqlite) | junk results, slow index | strict globs, `is_subagent` filter, hard exclude telemetry files |
 | Embedding cost/latency for ~1.7k sessions | slow cold start | chunk caps, batching, content-hash cache, resumable indexing |
-| Secrets sent to Voyage | privacy leak | redaction + offline-embedding fallback (Phase 2) |
+| Hosted embedding provider accidentally selected | privacy leak | local provider default, explicit Voyage opt-in, redaction before outbound embedding |
 | Resume correctness (deleted worktrees, id format quirks) | dead commands | validate cwd/CLI, surface warnings, fork fallback |
 | Cloud API undocumented | Phase 3 slips | isolate behind adapter; v1 ships without it |
 
@@ -362,7 +362,7 @@ interface SessionAdapter {
 ## 15. Open Questions
 
 1. **Title synthesis for pi** — first-message truncation for v1; is an LLM-generated title (batch, cached) worth the cost later?
-2. **Embedding model** — `voyage-code-3` (code-aware) vs `voyage-3` (general). Sessions are code-heavy → lean code-3; confirm dims for the vec table.
-3. **Redaction default** — on or off in v1? (Leaning off for fidelity, with a flag; revisit before any cloud sync.)
+2. **Embedding model** — local `embeddinggemma` by default (768 dims); if `VOYAGE_API_KEY` is present in the environment, use Voyage `voyage-code-3` (1024 dims) unless the user forces local.
+3. **Redaction default** — on by default before any embedding provider; local users can disable for fidelity if desired.
 4. **Index location** — `~/.local/share/recall/` vs alongside `codesift` if we share infra.
 5. **cmux integration** — is the print/copy flow enough long-term, or do you want a first-class "open in new cmux pane" action sooner than Phase 3?

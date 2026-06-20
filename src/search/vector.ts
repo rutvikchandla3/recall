@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 import type { RecallConfig } from '../core/config.js';
 import { createVectorRepo, ensureVectorTable } from '../db/vector-repo.js';
 import type { SqliteDatabase } from '../db/types.js';
+import { createEmbeddingClient, embeddingModelCacheKey, isEmbeddingConfigured } from '../embeddings/client.js';
 import { redactForEmbedding } from '../embeddings/redact.js';
 import { embeddingToBuffer } from '../embeddings/vector.js';
-import { VoyageEmbeddingClient } from '../embeddings/voyage.js';
 import type { VectorSearchHit } from './models.js';
 
 interface VectorSearchRow {
@@ -42,7 +42,7 @@ export async function searchVectorHits(
   options: VectorSearchOptions = {},
 ): Promise<VectorSearchHit[]> {
   const normalizedQuery = freeText.trim();
-  if (!normalizedQuery || !config.embeddings.enabled || !config.embeddings.apiKey) {
+  if (!normalizedQuery || !isEmbeddingConfigured(config)) {
     return [];
   }
 
@@ -75,13 +75,13 @@ async function embedQueryWithCache(db: SqliteDatabase, config: RecallConfig, que
   const vectorRepo = createVectorRepo(db);
   const outbound = config.embeddings.redactBeforeSend ? redactForEmbedding(query).text : query;
   const hash = createHash('sha256')
-    .update(config.embeddings.model)
+    .update(embeddingModelCacheKey(config))
     .update('\0query\0')
     .update(outbound)
     .digest('hex');
   const key = {
     hash,
-    model: config.embeddings.model,
+    model: embeddingModelCacheKey(config),
     dimensions: config.embeddings.dimensions,
   };
   const cached = vectorRepo.getCachedQueryEmbedding(key);
@@ -89,19 +89,10 @@ async function embedQueryWithCache(db: SqliteDatabase, config: RecallConfig, que
     return cached;
   }
 
-  const apiKey = config.embeddings.apiKey;
-  if (!apiKey) {
-    throw new Error('VOYAGE_API_KEY is required for semantic search.');
-  }
-
-  const client = new VoyageEmbeddingClient({
-    apiKey,
-    model: config.embeddings.model,
-    dimensions: config.embeddings.dimensions,
-  });
+  const client = createEmbeddingClient(config);
   const [embedding] = await client.embed([outbound], { inputType: 'query' });
   if (!embedding) {
-    throw new Error('Voyage returned no query embedding.');
+    throw new Error(`${config.embeddings.provider} returned no query embedding.`);
   }
 
   const vector = embeddingToBuffer(embedding, config.embeddings.dimensions);

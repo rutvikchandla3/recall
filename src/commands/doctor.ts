@@ -5,6 +5,7 @@ import { openDatabase, closeDatabase, createParseErrorsRepo, createChunksRepo, e
 import { type ProviderId } from '../domain/session.js';
 import { isCommandOnPath } from '../launch/validate.js';
 import { discoverSessions } from '../index/discover.js';
+import { checkEmbeddingReadiness, embeddingProviderLabel } from '../embeddings/client.js';
 
 const providerBinary: Record<ProviderId, string> = {
   claude: 'claude',
@@ -18,7 +19,12 @@ export async function runDoctorCommand(): Promise<void> {
   console.log('Environment');
   console.log(`- config dir: ${config.paths.configDir}`);
   console.log(`- data dir: ${config.paths.dataDir}`);
-  console.log(`- voyage key: ${config.embeddings.apiKey ? 'present' : 'missing (semantic search disabled later)'}`);
+  console.log(`- embeddings: ${config.embeddings.enabled ? 'enabled' : 'disabled'} · ${embeddingProviderLabel(config)} · ${config.embeddings.model} · ${config.embeddings.dimensions} dimensions`);
+  if (config.embeddings.provider === 'voyage') {
+    console.log(`- voyage key: ${config.embeddings.apiKey ? 'present' : 'missing'}`);
+  } else {
+    console.log(`- ollama endpoint: ${config.embeddings.endpoint}`);
+  }
   console.log('');
 
   console.log('Providers');
@@ -32,6 +38,23 @@ export async function runDoctorCommand(): Promise<void> {
       : rootChecks.map((entry) => `${entry.ok ? 'OK' : 'WARN'} ${entry.root}`).join(', ');
 
     console.log(`- ${adapter.id}: ${providerConfig.enabled ? 'enabled' : 'disabled'} · binary ${isCommandOnPath(binary) ? 'OK' : 'WARN'} · ${rootSummary} · ${discoverable} files`);
+  }
+  console.log('');
+
+  console.log('Embeddings');
+  if (!config.embeddings.enabled) {
+    console.log('- disabled in config');
+  } else {
+    if (config.embeddings.provider === 'local') {
+      console.log(`- ollama binary: ${isCommandOnPath('ollama') ? 'OK' : 'WARN missing from PATH'}`);
+    }
+    const readiness = await checkEmbeddingReadiness(config);
+    console.log(`- setup: ${readiness.ok ? 'OK ready' : `WARN ${readiness.message ?? 'not ready'}`}`);
+    if (!readiness.ok && readiness.setup && readiness.setup.length > 0) {
+      for (const step of readiness.setup) {
+        console.log(`  • ${step}`);
+      }
+    }
   }
   console.log('');
 

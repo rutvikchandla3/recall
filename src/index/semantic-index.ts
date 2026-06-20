@@ -3,11 +3,13 @@ import type { RecallConfig } from '../core/config.js';
 import type { Logger } from '../core/logger.js';
 import { createChunksRepo, createVectorRepo, type ChunkInsertInput, type StoredChunkRecord } from '../db/index.js';
 import type { StoredSessionDocument, SqliteDatabase } from '../db/types.js';
+import { createEmbeddingClient, checkEmbeddingReadiness, embeddingModelCacheKey } from '../embeddings/client.js';
 import { redactForEmbedding } from '../embeddings/redact.js';
 import { embeddingToBuffer } from '../embeddings/vector.js';
-import { VoyageEmbeddingClient } from '../embeddings/voyage.js';
 import { chunkSessionText } from './chunk.js';
 import { CHUNK_VERSION } from './normalize.js';
+
+export type SemanticStatus = 'ready' | 'disabled' | 'not_ready' | 'unavailable';
 
 export interface SemanticIndexSummary {
   chunkedSessions: number;
@@ -16,6 +18,9 @@ export interface SemanticIndexSummary {
   reusedEmbeddings: number;
   embeddingFailures: number;
   semanticEnabled: boolean;
+  semanticStatus: SemanticStatus;
+  semanticMessage?: string;
+  semanticSetup?: string[];
 }
 
 export interface SemanticProgressEvent {
@@ -52,7 +57,9 @@ export async function indexSemanticDocuments(
     embeddedChunks: 0,
     reusedEmbeddings: 0,
     embeddingFailures: 0,
-    semanticEnabled: Boolean(config.embeddings.enabled && config.embeddings.apiKey),
+    semanticEnabled: false,
+    semanticStatus: config.embeddings.enabled ? 'not_ready' : 'disabled',
+    ...(config.embeddings.enabled ? {} : { semanticMessage: 'Embeddings are disabled in config.' }),
   };
 
   options.onProgress?.({ phase: 'chunk', current: 0, total: targets.length });
@@ -71,16 +78,27 @@ export async function indexSemanticDocuments(
   }
 
   if (!config.embeddings.enabled) {
-    logger?.info('Embeddings disabled; chunk index updated without vectors.');
     return summary;
   }
 
-  if (!config.embeddings.apiKey) {
-    logger?.info('VOYAGE_API_KEY missing; chunk index updated but semantic vectors were not embedded.');
+  try {
+    vectorRepo.ensureVectorTable(config.embeddings.dimensions);
+  } catch (error) {
+    summary.semanticStatus = 'unavailable';
+    summary.semanticMessage = `Vector table unavailable: ${error instanceof Error ? error.message : String(error)}`;
+    summary.embeddingFailures += 1;
     return summary;
   }
 
-  vectorRepo.ensureVectorTable(config.embeddings.dimensions);
+  const readiness = await checkEmbeddingReadiness(config);
+  summary.semanticEnabled = readiness.ok;
+  summary.semanticStatus = readiness.ok ? 'ready' : 'not_ready';
+  if (readiness.message) {
+    summary.semanticMessage = readiness.message;
+  }
+  if (readiness.setup && readiness.setup.length > 0) {
+    summary.semanticSetup = readiness.setup;
+  }
 
   const pending = chunksRepo.listPending(DEFAULT_BACKFILL_LIMIT);
   const missing: StoredChunkRecord[] = [];
@@ -90,7 +108,7 @@ export async function indexSemanticDocuments(
   for (const chunk of pending) {
     const cached = vectorRepo.getCachedEmbedding({
       hash: chunk.embedSha256 ?? chunk.textSha256,
-      model: config.embeddings.model,
+      model: embeddingModelCacheKey(config),
       dimensions: config.embeddings.dimensions,
     });
 
@@ -111,15 +129,15 @@ export async function indexSemanticDocuments(
     }
   }
 
+  if (!readiness.ok) {
+    return summary;
+  }
+
   if (missing.length === 0) {
     return summary;
   }
 
-  const client = new VoyageEmbeddingClient({
-    apiKey: config.embeddings.apiKey,
-    model: config.embeddings.model,
-    dimensions: config.embeddings.dimensions,
-  });
+  const client = createEmbeddingClient(config);
 
   const batchSize = Math.max(1, Math.min(config.embeddings.batchSize, 128));
   for (let index = 0; index < missing.length; index += batchSize) {
@@ -140,7 +158,7 @@ export async function indexSemanticDocuments(
         const vector = embeddingToBuffer(embedding, config.embeddings.dimensions);
         const key = {
           hash: chunk.embedSha256 ?? chunk.textSha256,
-          model: config.embeddings.model,
+          model: embeddingModelCacheKey(config),
           dimensions: config.embeddings.dimensions,
         };
         vectorRepo.setCachedEmbedding(key, vector);
@@ -176,7 +194,7 @@ export async function indexSemanticDocuments(
 }
 
 function semanticChunkVersion(config: RecallConfig): string {
-  return `${CHUNK_VERSION}:${config.embeddings.model}:${config.embeddings.dimensions}:${config.embeddings.redactBeforeSend ? 'redact' : 'raw'}`;
+  return `${CHUNK_VERSION}:${embeddingModelCacheKey(config)}:${config.embeddings.dimensions}:${config.embeddings.redactBeforeSend ? 'redact' : 'raw'}`;
 }
 
 function prepareChunks(document: StoredSessionDocument, config: RecallConfig): ChunkInsertInput[] {
@@ -187,7 +205,7 @@ function prepareChunks(document: StoredSessionDocument, config: RecallConfig): C
   }).map((chunk) => {
     const redacted = config.embeddings.redactBeforeSend ? redactForEmbedding(chunk.text).text : chunk.text;
     const embedSha256 = createHash('sha256')
-      .update(config.embeddings.model)
+      .update(embeddingModelCacheKey(config))
       .update('\0')
       .update(redacted)
       .digest('hex');

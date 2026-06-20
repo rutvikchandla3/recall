@@ -6,7 +6,7 @@ This document translates `PRD.md` into an implementation-ready plan for a greenf
 
 ### v1 target
 - Local-only indexing of Claude Code, Codex, and pi sessions.
-- Hybrid search: SQLite FTS5 + Voyage embeddings via `sqlite-vec`.
+- Hybrid search: SQLite FTS5 + local Ollama embeddings by default, with optional Voyage embeddings, via `sqlite-vec`.
 - Ink TUI for live search, ranked results, preview, and copyable resume command.
 - CLI commands: `recall`, `index`, `search`, `sync`, `doctor`, `config`.
 - Resume behavior is print + copy only. No direct process handoff in v1.
@@ -14,7 +14,7 @@ This document translates `PRD.md` into an implementation-ready plan for a greenf
 ### Assumptions
 - Node 20+.
 - SQLite extension loading is available on the machine.
-- `voyage-code-3` is the default embedding model unless the spike disproves it.
+- Local Ollama `embeddinggemma` is the default embedding model; `voyage-code-3` is used automatically when `VOYAGE_API_KEY` is present in the environment, unless `RECALL_EMBEDDINGS_PROVIDER=local` forces local.
 - Repo currently has only `PRD.md`, so this plan defines the initial project structure too.
 - Examples below assume `pnpm`, but the implementation is package-manager agnostic.
 
@@ -466,10 +466,10 @@ Only regenerate chunks/vectors when this hash changes.
   - choose remaining slots by chunk density score (keyword richness / message density)
 
 ### 11.2 Token counting
-Use an approximate tokenizer library rather than raw character count so chunk windows stay consistent. If exact Voyage tokenization is not available, approximate is acceptable because retrieval quality matters more than token-perfect limits.
+Use an approximate tokenizer library rather than raw character count so chunk windows stay consistent. Exact provider tokenization is not required because retrieval quality matters more than token-perfect limits.
 
 ### 11.3 Redaction before embedding
-Redact only the text sent to Voyage, not the local searchable body.
+Redact only the text sent to the embedding provider, not the local searchable body.
 
 Default redaction patterns:
 - `KEY=...` env var assignments for obvious secret names
@@ -483,7 +483,7 @@ Replace with semantic placeholders like `<REDACTED_API_KEY>` so embeddings prese
 ### 11.4 Embedding cache
 - `chunk_hash = sha256(model + '\0' + redactedChunkText)`
 - if cached, reuse stored vector
-- if missing, batch requests to Voyage
+- if missing, batch requests to the configured embedding provider (local Ollama by default; Voyage opt-in)
 - batch size configurable; default 32
 
 ## 12. Search design
@@ -638,7 +638,7 @@ interface AppState {
 Checks:
 - provider directories exist
 - `claude`, `codex`, `pi` binaries on PATH
-- `VOYAGE_API_KEY` present when semantic search enabled
+- embedding provider readiness (Ollama/model for local; `VOYAGE_API_KEY` for Voyage)
 - sqlite DB opens and migrations succeed
 - sqlite extension for `sqlite-vec` loads
 - latest index stats by provider
@@ -688,9 +688,10 @@ Suggested default config:
     "backgroundSyncOnLaunch": true
   },
   "embeddings": {
-    "provider": "voyage",
-    "model": "voyage-code-3",
-    "dimensions": 1024,
+    "provider": "local",
+    "model": "embeddinggemma",
+    "dimensions": 768,
+    "endpoint": "http://127.0.0.1:11434",
     "batchSize": 32,
     "redactBeforeSend": true,
     "enabled": true
@@ -703,7 +704,7 @@ Suggested default config:
 }
 ```
 
-Use `zod` to validate config and merge with defaults.
+Use `zod` to validate config and merge with defaults. Environment precedence: `RECALL_EMBEDDINGS_PROVIDER` wins; otherwise a direct `VOYAGE_API_KEY`/`RECALL_EMBEDDINGS_API_KEY` selects Voyage; otherwise config/defaults select local.
 
 ## 17. Testing strategy
 
@@ -794,7 +795,7 @@ Exit criteria:
 ## Milestone 2 — Semantic and hybrid search
 Tasks:
 1. chunker
-2. redaction + Voyage client
+2. redaction + embedding clients (local Ollama default, Voyage opt-in)
 3. embedding cache
 4. vector table integration
 5. hybrid fusion + boosts
@@ -848,7 +849,7 @@ Exit criteria:
 - C2: manifest/incremental sync engine
 - C3: FTS indexing + search
 - C4: chunking + cache
-- C5: Voyage embedding client + redaction
+- C5: local Ollama + Voyage embedding clients + redaction
 - C6: vector search + RRF + rerank
 
 ### Track D — UX
@@ -877,7 +878,7 @@ Exit criteria:
 7. **Implement cleaner/title synthesizer/merge pipeline**
 8. **Implement `recall index` + manifest skipping**
 9. **Implement FTS indexing + `recall search --json`**
-10. **Implement chunking + embedding cache + Voyage client**
+10. **Implement chunking + embedding cache + local/Voyage embedding clients**
 11. **Implement vector search + RRF reranking**
 12. **Implement Ink TUI + preview/actions**
 13. **Implement `doctor` + command validation**
@@ -888,7 +889,7 @@ Exit criteria:
 - **Format drift**: keep per-provider fixture coverage and defensive parsing.
 - **pi session merging**: nested layouts may duplicate or fragment sessions; keep merge logic isolated and test-heavy.
 - **Extension loading**: probe sqlite-vec during doctor and fail early with actionable messaging.
-- **Secret leakage to Voyage**: default redaction on for outbound embedding text.
+- **Hosted embedding privacy**: local embeddings by default; Voyage requires explicit provider selection; keep redaction on for outbound embedding text.
 - **Cold start cost**: chunk caps + embedding cache + resumable sync.
 - **Deleted worktrees**: preserve resume command but visibly warn.
 

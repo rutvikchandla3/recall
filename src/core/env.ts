@@ -20,3 +20,13 @@ export function getEnvBoolean(name: string): boolean | undefined {
 
   return undefined;
 }
+
+export function getEnvInteger(name: string): number | undefined {
+  const value = getEnv(name);
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}

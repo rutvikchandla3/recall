@@ -19,7 +19,7 @@ import type { StoredSessionDocument } from '../db/types.js';
 import { discoverSessions } from './discover.js';
 import { normalizeParsedSessions } from './normalize.js';
 import { parseDiscoveredSessions } from './ingest.js';
-import { indexSemanticDocuments, type SemanticIndexSummary, type SemanticProgressEvent } from './semantic-index.js';
+import { indexSemanticDocuments, type SemanticIndexSummary, type SemanticProgressEvent, type SemanticStatus } from './semantic-index.js';
 
 export interface SyncOptions {
   full?: boolean;
@@ -42,6 +42,9 @@ export interface SyncSummary {
   reusedEmbeddings: number;
   embeddingFailures: number;
   semanticEnabled: boolean;
+  semanticStatus: SemanticStatus;
+  semanticMessage?: string;
+  semanticSetup?: string[];
 }
 
 const ALWAYS_REPARSE_PROVIDER = new Set<ProviderId>(['pi']);
@@ -162,6 +165,9 @@ export async function runSync(options: SyncOptions = {}): Promise<SyncSummary> {
       reusedEmbeddings: semanticSummary.reusedEmbeddings,
       embeddingFailures: semanticSummary.embeddingFailures,
       semanticEnabled: semanticSummary.semanticEnabled,
+      semanticStatus: semanticSummary.semanticStatus,
+      ...(semanticSummary.semanticMessage !== undefined ? { semanticMessage: semanticSummary.semanticMessage } : {}),
+      ...(semanticSummary.semanticSetup !== undefined ? { semanticSetup: semanticSummary.semanticSetup } : {}),
     };
   } finally {
     closeDatabase(db);
@@ -252,13 +258,15 @@ async function runSemanticIndex(
       reusedEmbeddings: 0,
       embeddingFailures: 1,
       semanticEnabled: false,
+      semanticStatus: 'unavailable',
+      semanticMessage: error instanceof Error ? error.message : String(error),
     };
   }
 }
 
 function clearProviderState(db: Awaited<ReturnType<typeof openDatabase>>, provider?: ProviderId): void {
   if (!provider) {
-    deleteVectorRows(db);
+    dropVectorTable(db);
     db.exec(`
       DELETE FROM parse_errors;
       DELETE FROM session_sources;
@@ -296,6 +304,14 @@ function clearProviderState(db: Awaited<ReturnType<typeof openDatabase>>, provid
     deleteParseErrors.run(provider);
     deleteSources.run(provider);
   })();
+}
+
+function dropVectorTable(db: Awaited<ReturnType<typeof openDatabase>>): void {
+  try {
+    db.prepare('DROP TABLE IF EXISTS chunk_embeddings').run();
+  } catch {
+    // Vector table may not exist or sqlite-vec may be unavailable.
+  }
 }
 
 function deleteVectorRows(db: Awaited<ReturnType<typeof openDatabase>>, provider?: ProviderId): void {

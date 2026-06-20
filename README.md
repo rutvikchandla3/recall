@@ -59,8 +59,20 @@ On first launch, Recall now:
 - auto-discovers Claude, Codex, and pi session roots
 - starts indexing in the background
 
-Semantic search uses Voyage for embeddings and stores vectors locally with `sqlite-vec`.
-Set `VOYAGE_API_KEY` before running `recall sync` / `recall index`; without it, Recall still indexes chunks and falls back to FTS-only search.
+Semantic search stores vectors locally with `sqlite-vec`. The default embedding setup is local-first via Ollama + `embeddinggemma`; without a ready local model, Recall still indexes chunks and falls back to FTS-only search.
+
+One-time local semantic setup:
+
+```bash
+# Install/start Ollama first if needed: https://ollama.com/download
+ollama pull embeddinggemma
+recall doctor   # verifies Ollama/model readiness
+recall sync
+```
+
+Prefer Voyage instead? If `VOYAGE_API_KEY` is already present in your environment, Recall automatically selects Voyage for sync/search (unless you force `RECALL_EMBEDDINGS_PROVIDER=local`). You can also set `embeddings.provider` to `"voyage"` in `~/.config/recall/config.json`, use model `voyage-code-3` with `dimensions: 1024`, and set `VOYAGE_API_KEY` before running `recall sync` / `recall index`. After switching embedding dimensions or providers, run `recall index --full` if prompted.
+
+`recall sync` and `recall doctor` print setup hints when semantic search is not enabled, e.g. when Ollama is not running, `embeddinggemma` has not been pulled, or a Voyage key is missing.
 
 `npm install` itself does **not** scan or index your machine. Indexing starts on first `recall` launch.
 

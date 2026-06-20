@@ -1,12 +1,52 @@
 import { access, chmod, readFile, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { ConfigError } from './errors.js';
-import { getEnv, getEnvBoolean } from './env.js';
+import { getEnv, getEnvBoolean, getEnvInteger } from './env.js';
 import { defaultConfigDir, defaultDataDir, ensureDir, expandHome, resolvePaths } from './paths.js';
 
 const providerSchema = z.object({
   enabled: z.boolean().default(true),
   roots: z.array(z.string()).default([]),
+});
+
+const embeddingProviderSchema = z.preprocess(
+  (value) => value === 'ollama' ? 'local' : value,
+  z.enum(['local', 'voyage']).default('local'),
+);
+
+const LOCAL_EMBEDDING_DEFAULTS = {
+  model: 'embeddinggemma',
+  dimensions: 768,
+  endpoint: 'http://127.0.0.1:11434',
+} as const;
+
+const VOYAGE_EMBEDDING_DEFAULTS = {
+  model: 'voyage-code-3',
+  dimensions: 1024,
+  endpoint: 'https://api.voyageai.com/v1/embeddings',
+} as const;
+
+const embeddingsSchema = z.object({
+  provider: embeddingProviderSchema,
+  model: z.string().optional(),
+  dimensions: z.number().int().positive().optional(),
+  batchSize: z.number().int().positive().default(32),
+  redactBeforeSend: z.boolean().default(true),
+  enabled: z.boolean().default(true),
+  apiKey: z.string().min(1).optional(),
+  endpoint: z.string().min(1).optional(),
+}).default({}).transform((value) => {
+  const defaults = value.provider === 'voyage' ? VOYAGE_EMBEDDING_DEFAULTS : LOCAL_EMBEDDING_DEFAULTS;
+  return {
+    provider: value.provider,
+    model: value.model ?? defaults.model,
+    dimensions: value.dimensions ?? defaults.dimensions,
+    batchSize: value.batchSize,
+    redactBeforeSend: value.redactBeforeSend,
+    enabled: value.enabled,
+    endpoint: value.endpoint ?? defaults.endpoint,
+    ...(value.apiKey !== undefined ? { apiKey: value.apiKey } : {}),
+  };
 });
 
 const configSchema = z.object({
@@ -25,15 +65,7 @@ const configSchema = z.object({
     maxChunksPerSession: z.number().int().positive().default(40),
     backgroundSyncOnLaunch: z.boolean().default(true),
   }).default({}),
-  embeddings: z.object({
-    provider: z.literal('voyage').default('voyage'),
-    model: z.string().default('voyage-code-3'),
-    dimensions: z.number().int().positive().default(1024),
-    batchSize: z.number().int().positive().default(32),
-    redactBeforeSend: z.boolean().default(true),
-    enabled: z.boolean().default(true),
-    apiKey: z.string().optional(),
-  }).default({}),
+  embeddings: embeddingsSchema,
   search: z.object({
     defaultLimit: z.number().int().positive().default(20),
     includeSubagents: z.boolean().default(false),
@@ -54,6 +86,18 @@ export const defaultConfig: RecallConfig = configSchema.parse({
   search: {},
   launch: {},
 });
+
+function normalizeEmbeddingProvider(value: unknown): 'local' | 'voyage' | undefined {
+  if (value === 'ollama') {
+    return 'local';
+  }
+
+  if (value === 'local' || value === 'voyage') {
+    return value;
+  }
+
+  return undefined;
+}
 
 function normalizeConfig(config: RecallConfig): RecallConfig {
   return {
@@ -114,7 +158,19 @@ export async function loadConfig(): Promise<RecallConfig> {
   const fileEmbeddings = (fileValue.embeddings ?? {}) as Record<string, unknown> & {
     apiKey?: string;
     enabled?: boolean;
+    provider?: string;
   };
+  const providerOverride = getEnv('RECALL_EMBEDDINGS_PROVIDER');
+  const voyageApiKeyOverride = getEnv('VOYAGE_API_KEY');
+  const genericApiKeyOverride = getEnv('RECALL_EMBEDDINGS_API_KEY');
+  const fileEmbeddingProvider = normalizeEmbeddingProvider(fileEmbeddings.provider);
+  const rawEmbeddingProvider = providerOverride
+    ?? (voyageApiKeyOverride || genericApiKeyOverride ? 'voyage' : fileEmbeddingProvider ?? 'local');
+  const useFileEmbeddingOptions = fileEmbeddingProvider === undefined || fileEmbeddingProvider === normalizeEmbeddingProvider(rawEmbeddingProvider);
+  const embeddingEndpointOverride = getEnv('RECALL_EMBEDDINGS_ENDPOINT')
+    ?? (rawEmbeddingProvider === 'local' || rawEmbeddingProvider === 'ollama' ? getEnv('OLLAMA_HOST') : undefined);
+  const embeddingApiKeyOverride = genericApiKeyOverride
+    ?? (rawEmbeddingProvider === 'voyage' ? voyageApiKeyOverride : undefined);
 
   const merged = {
     ...fileValue,
@@ -124,8 +180,13 @@ export async function loadConfig(): Promise<RecallConfig> {
     },
     embeddings: {
       ...fileEmbeddings,
-      apiKey: getEnv('VOYAGE_API_KEY') ?? fileEmbeddings.apiKey,
+      provider: rawEmbeddingProvider,
+      apiKey: embeddingApiKeyOverride ?? (rawEmbeddingProvider === 'voyage' ? fileEmbeddings.apiKey : undefined),
       enabled: getEnvBoolean('RECALL_EMBEDDINGS_ENABLED') ?? fileEmbeddings.enabled,
+      model: getEnv('RECALL_EMBEDDINGS_MODEL') ?? (useFileEmbeddingOptions ? fileEmbeddings.model : undefined),
+      dimensions: getEnvInteger('RECALL_EMBEDDINGS_DIMENSIONS') ?? (useFileEmbeddingOptions ? fileEmbeddings.dimensions : undefined),
+      batchSize: getEnvInteger('RECALL_EMBEDDINGS_BATCH_SIZE') ?? fileEmbeddings.batchSize,
+      endpoint: embeddingEndpointOverride ?? (useFileEmbeddingOptions ? fileEmbeddings.endpoint : undefined),
     },
   };
 
