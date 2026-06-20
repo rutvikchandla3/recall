@@ -1,6 +1,6 @@
 {
   "name": "coding-agent-recall",
-  "version": "0.2.0",
+  "version": "0.1.1",
   "description": "Unified natural-language search and resume for coding agent sessions",
   "type": "module",
   "bin": {
