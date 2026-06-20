@@ -31,9 +31,8 @@ export function PreviewPane({ result, warnings = [], width = 60, height }: Previ
           <Text dimColor>{truncateText(`${formatDate(result.updatedAt)} · ${result.messageCount} msgs · ${result.models.join(', ') || 'unknown model'}`, lineWidth)}</Text>
           <Text dimColor>Match ({result.snippetSource})</Text>
           <Text>{truncateText(result.snippet, lineWidth * 2)}</Text>
-          <Text dimColor>Resume</Text>
+          <Text dimColor>Command copied by Enter</Text>
           <Text>{truncateText(result.resumeCmd, lineWidth)}</Text>
-          {result.forkCmd ? <Text dimColor>{truncateText(`Fork: ${result.forkCmd}`, lineWidth)}</Text> : null}
           {warnings.length > 0 ? warnings.slice(0, 2).map((warning) => (
             <Text key={warning} color="yellow">• {truncateText(warning, lineWidth)}</Text>
           )) : null}

@@ -15,9 +15,9 @@ You run 40–50 coding agents a day across Claude Code, Codex, and pi. Today the
 1. **Indexes** every session from every agent into one local store (metadata + full-text + embeddings).
 2. Lets you **ask in natural language** ("where did I wire up the Voyage embeddings?") and ranks matches across *all* tools with a hybrid semantic + keyword engine.
 3. Shows a **dropdown TUI** with provider badge, repo/branch, time, and the matching snippet.
-4. On select, **prints + copies the exact resume command** (`cd <cwd> && claude --resume <id>`) so you paste and you're back in that conversation.
+4. On select, **copies the exact full resume command** (`cd <cwd> && claude --resume <id>`) so you paste and you're back in that conversation.
 
-**v1 scope (decided):** TypeScript + Ink · hybrid search (local embeddings by default, optional Voyage + FTS5) · print/copy resume · local providers only (Claude CLI+IDE, Codex, pi). Cloud agents and exec-handoff are Phase 2+.
+**v1 scope (decided):** TypeScript + Ink · hybrid search (local embeddings by default, optional Voyage + FTS5) · copy full resume command · local providers only (Claude CLI+IDE, Codex, pi). Cloud agents and exec-handoff are Phase 2+.
 
 ---
 
@@ -88,7 +88,7 @@ $ recall
   → live search box; type natural language
   → ranked dropdown across all tools, with snippets
   → ↑/↓ to highlight, preview pane updates
-  → Enter → resume command printed + copied to clipboard → exit
+  → Enter → full resume command copied to clipboard
   → paste → you're back in the exact conversation
 ```
 
@@ -108,17 +108,14 @@ $ recall
 │ Matched: "…I added Voyage embeddings so each chunk is indexed…"     │
 │ Resume:  cd ~/rcode/codesift && claude --resume 76529b5e…           │
 ├────────────────────────────────────────────────────────────────────┤
-│ ↑↓ move  ⏎ copy resume cmd  t transcript  f fork  / filter  ? help │
+│ ↑↓ move  ⏎ copy full resume command  / filter  ? help             │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 5.3 Interactions
 - **Type** → live hybrid search (debounced ~120ms).
 - **↑/↓** → move selection; preview pane updates with metadata + matched excerpt + resume command.
-- **Enter** → print the full `cd … && <resume>` to stdout **and** copy to clipboard (`pbcopy`); exit 0.
-- **t** → open the raw transcript in `$PAGER`/`$EDITOR`.
-- **f** → copy the *fork* command instead (`codex fork` / `pi --fork`) where supported.
-- **y** → copy just the session id.
+- **Enter** → copy the full `cd … && <resume>` command to clipboard.
 - **/** or inline tokens → filters (below).
 - **?** → keybinding help.
 
@@ -154,14 +151,13 @@ $ recall
 - **FR-11** Honor inline filters (§5.4) as hard pre-filters before ranking.
 - **FR-12** Headless mode: `recall search "<q>" --json` returns the ranked results for scripting / future MCP.
 
-### 6.3 Resume / launch (print-and-copy)
+### 6.3 Resume / launch (copy)
 - **FR-13** Build the resume command from the per-provider template and the session's `cwd`:
   - Claude → `cd <cwd> && claude --resume <id>`
   - Codex → `cd <cwd> && codex resume <id>`
   - pi → `cd <cwd> && pi --session <id>`  (fallback `pi --session-id <id>`)
-- **FR-14** On Enter: print to stdout + copy to clipboard; exit 0.
-- **FR-15** Validate before offering: warn if `cwd` no longer exists (deleted worktree) or the CLI isn't on `PATH`; still copy the command but flag it.
-- **FR-16** `f` produces the fork variant where supported (`codex fork <id>`, `pi --fork <id>`).
+- **FR-14** On Enter: copy the full resume command to clipboard.
+- **FR-15** Warn if `cwd` is unknown; still copy the command.
 
 ### 6.4 Freshness
 - **FR-17** `recall` runs an incremental sync on launch (fast, non-blocking — first paint uses the existing index, results refresh when sync lands).
@@ -319,13 +315,13 @@ interface SessionAdapter {
 
 ### Phase 1 — MVP (the shippable v1)
 - Add local-first embeddings (Ollama `embeddinggemma` by default), optional Voyage, sqlite-vec, and hybrid RRF ranking + boosts.
-- Ink TUI: live search, result list, preview pane, print/copy resume.
+- Ink TUI: live search, result list, preview pane, one-keystroke copy of the full resume command.
 - Incremental sync on launch; subagent filtering; inline filters.
 - **Exit:** "where did I build X" reliably surfaces the right session in top-5, copyable in one keystroke.
 
 ### Phase 2 — Daily-driver polish
 - `recall watch` daemon (chokidar) for near-instant freshness.
-- Transcript preview/pager, fork action, richer facets, fuzzy repo filter.
+- Richer preview, facets, fuzzy repo filter, and optional raw transcript viewer if needed later.
 - Better model setup UX, additional local backends, and redaction tuning.
 
 ### Phase 3 — Reach
@@ -344,7 +340,7 @@ interface SessionAdapter {
 | Subagent/telemetry noise (pi board/view, codex subagents, 288MB sqlite) | junk results, slow index | strict globs, `is_subagent` filter, hard exclude telemetry files |
 | Embedding cost/latency for ~1.7k sessions | slow cold start | chunk caps, batching, content-hash cache, resumable indexing |
 | Hosted embedding provider accidentally selected | privacy leak | local provider default, explicit Voyage opt-in, redaction before outbound embedding |
-| Resume correctness (deleted worktrees, id format quirks) | dead commands | validate cwd/CLI, surface warnings, fork fallback |
+| Resume correctness (deleted worktrees, id format quirks) | dead commands | validate cwd/CLI and surface warnings |
 | Cloud API undocumented | Phase 3 slips | isolate behind adapter; v1 ships without it |
 
 ---
@@ -365,4 +361,4 @@ interface SessionAdapter {
 2. **Embedding model** — local `embeddinggemma` by default (768 dims); if `VOYAGE_API_KEY` is present in the environment, use Voyage `voyage-code-3` (1024 dims) unless the user forces local.
 3. **Redaction default** — on by default before any embedding provider; local users can disable for fidelity if desired.
 4. **Index location** — `~/.local/share/recall/` vs alongside `codesift` if we share infra.
-5. **cmux integration** — is the print/copy flow enough long-term, or do you want a first-class "open in new cmux pane" action sooner than Phase 3?
+5. **cmux integration** — is the copy-to-clipboard flow enough long-term, or do you want a first-class "open in new cmux pane" action sooner than Phase 3?

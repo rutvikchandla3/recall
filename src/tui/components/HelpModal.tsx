@@ -13,8 +13,8 @@ export function HelpModal({ open }: HelpModalProps) {
     <Box flexDirection="column" borderStyle="round" paddingX={1} paddingY={0} marginTop={1}>
       <Text bold>Help</Text>
       <Box marginTop={1} flexDirection="column">
-        <Text>Type to search · Enter: resume command · Ctrl+F: fork · Ctrl+Y: copy command · Ctrl+T: transcript</Text>
-        <Text>↑/↓: move selection · Esc: close help · Ctrl+G: toggle help</Text>
+        <Text>Type to search · Enter: copy the full resume command to clipboard</Text>
+        <Text>↑/↓: move selection · Esc: close help · Ctrl+G: toggle help · Ctrl+D/Ctrl+C: quit</Text>
         <Text dimColor>Filters: provider:, repo:, branch:, surface:, since:, until:, include:subagents</Text>
         <Text dimColor>Examples: repo:recall since:7d voyage embeddings</Text>
       </Box>

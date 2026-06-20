@@ -19,9 +19,5 @@ export interface AppState {
 }
 
 export interface TuiActionHandlers {
-  onResume?(result: SearchResult): void | string | Promise<void | string>;
-  onFork?(result: SearchResult): void | string | Promise<void | string>;
   onCopyCommand?(result: SearchResult): void | string | Promise<void | string>;
-  onCopyId?(result: SearchResult): void | string | Promise<void | string>;
-  onTranscript?(result: SearchResult): void | string | Promise<void | string>;
 }

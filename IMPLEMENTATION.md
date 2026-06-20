@@ -9,7 +9,7 @@ This document translates `PRD.md` into an implementation-ready plan for a greenf
 - Hybrid search: SQLite FTS5 + local Ollama embeddings by default, with optional Voyage embeddings, via `sqlite-vec`.
 - Ink TUI for live search, ranked results, preview, and copyable resume command.
 - CLI commands: `recall`, `index`, `search`, `sync`, `doctor`, `config`.
-- Resume behavior is print + copy only. No direct process handoff in v1.
+- Resume behavior is copy-only. No direct process handoff in v1.
 
 ### Assumptions
 - Node 20+.
@@ -156,7 +156,7 @@ recall/
 - **CLI layer** parses commands and either launches the Ink app or runs a headless command.
 - **Background sync worker** performs incremental indexing without blocking TUI first paint.
 - **Search service** executes filters, keyword retrieval, vector retrieval, fusion, and snippet selection.
-- **Launch service** builds resume/fork commands, validates cwd/CLI presence, prints and copies output.
+- **Launch service** builds the full resume command and copies it to the clipboard.
 
 ### 4.2 Important design choices
 - Use **TypeScript + plain `tsc` output**, not a bundler, to avoid friction with native modules (`better-sqlite3`, `sqlite-vec`).
@@ -321,7 +321,6 @@ export interface SessionAdapter {
   discover(): AsyncIterable<string>;
   parse(path: string): Promise<ParsedProviderSession | ParsedProviderSession[] | null>;
   buildResumeCmd(input: { nativeId: string; cwd: string }): string;
-  buildForkCmd?(input: { nativeId: string; cwd: string }): string | null;
 }
 ```
 
@@ -341,7 +340,6 @@ Use one adapter per provider. Discovery is file-based; merge/dedupe happens afte
   - default `cli`
   - if record metadata indicates VS Code/IDE source, map to `ide`
 - Resume: `cd <cwd> && claude --resume <id>`
-- Fork: only if Claude CLI exposes a stable equivalent later; otherwise `null` in v1
 
 ## 7.3 Codex adapter
 - Discover: `~/.codex/sessions/**/rollout-*.jsonl`
@@ -356,7 +354,6 @@ Use one adapter per provider. Discovery is file-based; merge/dedupe happens afte
   - title from `thread_name` if present, else synthesize
   - transcript text from user/assistant response items only
 - Resume: `cd <cwd> && codex resume <id>`
-- Fork: `cd <cwd> && codex fork <id>`
 
 ## 7.4 pi adapter
 - Discover both layouts:
@@ -375,7 +372,6 @@ Use one adapter per provider. Discovery is file-based; merge/dedupe happens afte
   - transcript text from natural-language user/assistant messages only
 - Nested pi layouts may yield multiple files for the same logical session id; merge them by `provider:nativeId`, sort segments by timestamp, and union `transcriptPaths`.
 - Resume: `cd <cwd> && pi --session <id>`
-- Fork: `cd <cwd> && pi --fork <id>` if supported; otherwise omit
 - Fallback behavior if `--session` probe fails: store `pi --session-id <id>` in doctor output and allow config override
 
 ## 8. Text extraction and cleaning
@@ -584,8 +580,8 @@ interface AppState {
 - `PreviewPane`
   - richer metadata
   - matched excerpt
-  - resume/fork command
-  - warnings (`cwd missing`, `CLI missing`)
+  - full resume command
+  - warnings (`cwd missing`)
 - `Footer`
   - key hints
 - `HelpModal`
@@ -594,19 +590,11 @@ interface AppState {
 ## 13.3 Keyboard flows
 - type: update query
 - `↑` / `↓`: move selection
-- `Enter`: print + copy resume command, exit 0
-- `f`: print + copy fork command when supported
-- `y`: copy session id
-- `t`: open transcript in `$PAGER` or `$EDITOR`
+- `Enter`: copy the full resume command to the clipboard
 - `?`: toggle help
 - `Esc` or `Ctrl+C`: exit
 
-## 13.4 Transcript action
-- If `transcriptPaths.length === 1`, open it directly.
-- If multiple paths exist, create a merged temp file under the app data dir and open that.
-- Prefer `$PAGER`, then `$EDITOR`, then `less`.
-
-## 13.5 Startup behavior
+## 13.4 Startup behavior
 1. open DB and load previous index immediately
 2. render first paint
 3. if no DB exists yet, show a bootstrap state until baseline metadata + FTS indexing completes
@@ -650,13 +638,12 @@ Checks:
 - optionally `--json`
 - support `--edit` by opening the config file in `$EDITOR`; if absent, create it from defaults first
 
-## 15. Resume and fork command handling
+## 15. Resume command handling
 
 ### Validation rules
 Before showing/copying command:
-- verify cwd exists
-- verify executable is on PATH
-- if validation fails, still allow copy but surface warning in preview and footer
+- warn when cwd is unknown
+- still allow copy and surface the warning in preview and footer
 
 ### Templates
 - Claude: `cd <cwd> && claude --resume <id>`
@@ -753,7 +740,7 @@ Use Ink testing utilities for:
 - initial render
 - arrow navigation
 - help modal
-- enter triggers print/copy path
+- enter copies the full resume command
 - warnings render when cwd missing
 
 ## 17.6 Performance smoke tests
@@ -809,12 +796,12 @@ Exit criteria:
 Tasks:
 1. Ink search input/result list/preview pane
 2. background sync process
-3. enter/fork/transcript/session-id actions
+3. enter-to-copy resume command action
 4. warning badges and help modal
 
 Exit criteria:
 - first paint uses existing DB immediately
-- enter prints + copies exact resume command
+- enter copies exact full resume command
 - TUI remains usable during background sync
 
 ## Milestone 4 — Hardening and ship

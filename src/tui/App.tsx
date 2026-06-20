@@ -1,4 +1,4 @@
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { useEffect, useMemo, useState } from 'react';
 import type { SearchResult } from '../domain/result.js';
 import type { SearchService } from '../search/types.js';
@@ -42,6 +42,7 @@ export function App(props: AppProps) {
   const [helpOpen, setHelpOpen] = useState(false);
   const [footerMessage, setFooterMessage] = useState<string | null>(null);
   const [footerTone, setFooterTone] = useState<FooterTone>('info');
+  const { exit } = useApp();
   const { stdout } = useStdout();
   const columns = stdout.columns ?? 120;
   const rows = stdout.rows ?? 24;
@@ -87,6 +88,11 @@ export function App(props: AppProps) {
       return;
     }
 
+    if (key.ctrl && input === 'd') {
+      exit();
+      return;
+    }
+
     if (helpOpen) {
       return;
     }
@@ -102,22 +108,8 @@ export function App(props: AppProps) {
     }
 
     if (key.return) {
-      void runAction(props.onResume, selection.selectedResult, 'Resume command ready');
+      void runAction(props.onCopyCommand, selection.selectedResult, 'Copied full command to clipboard');
       return;
-    }
-
-    if (key.ctrl && input === 'f') {
-      void runAction(props.onFork, selection.selectedResult, 'Fork command ready');
-      return;
-    }
-
-    if (key.ctrl && input === 'y') {
-      void runAction(props.onCopyCommand, selection.selectedResult, 'Resume command copied');
-      return;
-    }
-
-    if (key.ctrl && input === 't') {
-      void runAction(props.onTranscript, selection.selectedResult, 'Transcript action triggered');
     }
   });
 
@@ -169,7 +161,7 @@ export function App(props: AppProps) {
         </Box>
       ) : null}
       <Box marginTop={1}>
-        <Footer message={footerMessage} messageTone={footerTone} syncStatus={props.syncStatus ?? 'idle'} />
+        <Footer message={footerMessage} messageTone={footerTone} syncStatus={props.syncStatus ?? 'idle'} width={columns} />
       </Box>
       <HelpModal open={helpOpen} />
     </Box>
