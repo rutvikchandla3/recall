@@ -1,3 +1,4 @@
+import { loadConfig } from '../core/config.js';
 import { openDatabase, closeDatabase } from '../db/connection.js';
 import type { SearchResult } from '../domain/result.js';
 import { createRepoResolver } from '../index/normalize.js';
@@ -11,10 +12,11 @@ export interface SearchCommandOptions {
 }
 
 export async function runSearchCommand(options: SearchCommandOptions): Promise<void> {
+  const config = await loadConfig();
   const db = await openDatabase({ runMigrations: true });
 
   try {
-    const service = createSqliteSearchService(db);
+    const service = createSqliteSearchService(db, { config });
     const repoResolver = createRepoResolver();
     const currentCwd = process.cwd();
     const currentRepo = await repoResolver.resolve(currentCwd);

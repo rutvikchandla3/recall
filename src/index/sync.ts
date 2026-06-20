@@ -5,6 +5,7 @@ import { defaultAdapters } from '../adapters/index.js';
 import type { SessionAdapter } from '../adapters/types.js';
 import { loadConfig, type RecallConfig } from '../core/config.js';
 import { createLogger, type Logger } from '../core/logger.js';
+import { createProgressReporter, type ProgressReporter } from '../core/progress.js';
 import {
   openDatabase,
   closeDatabase,
@@ -14,9 +15,11 @@ import {
   type ParseErrorUpsertInput,
 } from '../db/index.js';
 import type { ProviderId, SessionDocument } from '../domain/session.js';
+import type { StoredSessionDocument } from '../db/types.js';
 import { discoverSessions } from './discover.js';
 import { normalizeParsedSessions } from './normalize.js';
 import { parseDiscoveredSessions } from './ingest.js';
+import { indexSemanticDocuments, type SemanticIndexSummary, type SemanticProgressEvent } from './semantic-index.js';
 
 export interface SyncOptions {
   full?: boolean;
@@ -33,6 +36,12 @@ export interface SyncSummary {
   failed: number;
   deletedSources: number;
   deletedSessions: number;
+  chunkedSessions: number;
+  chunks: number;
+  embeddedChunks: number;
+  reusedEmbeddings: number;
+  embeddingFailures: number;
+  semanticEnabled: boolean;
 }
 
 const ALWAYS_REPARSE_PROVIDER = new Set<ProviderId>(['pi']);
@@ -79,6 +88,11 @@ export async function runSync(options: SyncOptions = {}): Promise<SyncSummary> {
 
     logger.info(`Discovered ${discovered.length} session files`);
     logger.info(`Parsing ${changedCandidates.length} changed session files`);
+    const parseProgress = createProgressReporter({
+      label: 'Parsing sessions',
+      total: changedCandidates.length,
+      enabled: !options.quiet && changedCandidates.length > 0,
+    });
 
     const sourceRecords = await Promise.all(
       discovered.map(async (candidate) => {
@@ -99,13 +113,19 @@ export async function runSync(options: SyncOptions = {}): Promise<SyncSummary> {
 
     sourcesRepo.upsertMany(sourceRecords);
 
-    const { parsed, failures } = await parseDiscoveredSessions(changedCandidates, adapters);
+    const { parsed, failures } = await parseDiscoveredSessions(changedCandidates, adapters, {
+      onProgress(event) {
+        parseProgress.update(event.current, event.provider);
+      },
+    });
+    parseProgress.finish(`Parsed ${changedCandidates.length} files (${parsed.length} sessions, ${failures.length} failures).`);
     const documents = await normalizeParsedSessions(parsed, {
       preferPiSessionIdFallback: config.launch.preferPiSessionIdFallback,
     });
 
+    let storedDocuments: StoredSessionDocument[] = [];
     if (documents.length > 0) {
-      upsertSessionDocuments(sessionsRepo, documents);
+      storedDocuments = upsertSessionDocuments(sessionsRepo, documents);
     }
 
     const failureInputs: ParseErrorUpsertInput[] = failures.map((failure) => ({
@@ -125,6 +145,9 @@ export async function runSync(options: SyncOptions = {}): Promise<SyncSummary> {
     }
 
     const deletedSessions = cleanupOrphanSessions(db);
+    const semanticProgress = createSemanticProgressReporter(!options.quiet);
+    const semanticSummary = await runSemanticIndex(db, storedDocuments, config, logger, semanticProgress.onProgress);
+    semanticProgress.finish();
 
     return {
       discovered: discovered.length,
@@ -133,6 +156,12 @@ export async function runSync(options: SyncOptions = {}): Promise<SyncSummary> {
       failed: failures.length,
       deletedSources,
       deletedSessions,
+      chunkedSessions: semanticSummary.chunkedSessions,
+      chunks: semanticSummary.chunks,
+      embeddedChunks: semanticSummary.embeddedChunks,
+      reusedEmbeddings: semanticSummary.reusedEmbeddings,
+      embeddingFailures: semanticSummary.embeddingFailures,
+      semanticEnabled: semanticSummary.semanticEnabled,
     };
   } finally {
     closeDatabase(db);
@@ -150,15 +179,90 @@ function selectAdapters(provider: ProviderId | undefined): SessionAdapter[] {
 function upsertSessionDocuments(
   sessionsRepo: ReturnType<typeof createSessionsRepo>,
   documents: readonly SessionDocument[],
-): void {
-  sessionsRepo.upsertMany(documents);
+): StoredSessionDocument[] {
+  return sessionsRepo.upsertMany(documents);
+}
+
+function createSemanticProgressReporter(enabled: boolean): {
+  onProgress?: (event: SemanticProgressEvent) => void;
+  finish(): void;
+} {
+  if (!enabled) {
+    return {
+      finish() {},
+    };
+  }
+
+  let chunkProgress: ProgressReporter | undefined;
+  let embedProgress: ProgressReporter | undefined;
+  let chunkDone = false;
+  let embedDone = false;
+
+  return {
+    onProgress(event) {
+      if (event.total <= 0) {
+        return;
+      }
+
+      if (event.phase === 'chunk') {
+        chunkProgress ??= createProgressReporter({ label: 'Chunking sessions', total: event.total });
+        chunkProgress.update(event.current, event.detail);
+        if (!chunkDone && event.current >= event.total) {
+          chunkDone = true;
+          chunkProgress.finish(`Chunked ${event.total} sessions.`);
+        }
+        return;
+      }
+
+      embedProgress ??= createProgressReporter({ label: 'Embedding chunks', total: event.total, minIntervalMs: 500 });
+      embedProgress.update(event.current, event.detail);
+      if (!embedDone && event.current >= event.total) {
+        embedDone = true;
+        embedProgress.finish(`Embedded ${event.total} chunks.`);
+      }
+    },
+    finish() {
+      if (chunkProgress && !chunkDone) {
+        chunkProgress.finish();
+        chunkDone = true;
+      }
+      if (embedProgress && !embedDone) {
+        embedProgress.finish();
+        embedDone = true;
+      }
+    },
+  };
+}
+
+async function runSemanticIndex(
+  db: Awaited<ReturnType<typeof openDatabase>>,
+  documents: readonly StoredSessionDocument[],
+  config: RecallConfig,
+  logger: Logger,
+  onProgress?: (event: SemanticProgressEvent) => void,
+): Promise<SemanticIndexSummary> {
+  try {
+    return await indexSemanticDocuments(db, documents, config, logger, onProgress ? { onProgress } : {});
+  } catch (error) {
+    logger.warn(`Semantic indexing skipped: ${error instanceof Error ? error.message : String(error)}`);
+    return {
+      chunkedSessions: 0,
+      chunks: 0,
+      embeddedChunks: 0,
+      reusedEmbeddings: 0,
+      embeddingFailures: 1,
+      semanticEnabled: false,
+    };
+  }
 }
 
 function clearProviderState(db: Awaited<ReturnType<typeof openDatabase>>, provider?: ProviderId): void {
   if (!provider) {
+    deleteVectorRows(db);
     db.exec(`
       DELETE FROM parse_errors;
       DELETE FROM session_sources;
+      DELETE FROM chunks;
       DELETE FROM session_docs;
       DELETE FROM sessions;
       DELETE FROM sources;
@@ -166,6 +270,12 @@ function clearProviderState(db: Awaited<ReturnType<typeof openDatabase>>, provid
     return;
   }
 
+  deleteVectorRows(db, provider);
+
+  const deleteChunks = db.prepare<[ProviderId]>(`
+    DELETE FROM chunks
+    WHERE session_id IN (SELECT id FROM sessions WHERE provider = ?)
+  `);
   const deleteSessionSources = db.prepare<[ProviderId]>(`
     DELETE FROM session_sources
     WHERE session_id IN (SELECT id FROM sessions WHERE provider = ?)
@@ -180,6 +290,7 @@ function clearProviderState(db: Awaited<ReturnType<typeof openDatabase>>, provid
 
   db.transaction(() => {
     deleteSessionSources.run(provider);
+    deleteChunks.run(provider);
     deleteSessionDocs.run(provider);
     deleteSessions.run(provider);
     deleteParseErrors.run(provider);
@@ -187,7 +298,47 @@ function clearProviderState(db: Awaited<ReturnType<typeof openDatabase>>, provid
   })();
 }
 
+function deleteVectorRows(db: Awaited<ReturnType<typeof openDatabase>>, provider?: ProviderId): void {
+  try {
+    if (!provider) {
+      db.prepare('DELETE FROM chunk_embeddings').run();
+      return;
+    }
+
+    const ids = db.prepare<[ProviderId], { id: number }>(`
+      SELECT c.id
+      FROM chunks c
+      JOIN sessions s ON s.id = c.session_id
+      WHERE s.provider = ?
+    `).all(provider);
+    const deleteVector = db.prepare<[bigint]>('DELETE FROM chunk_embeddings WHERE chunk_id = ?');
+    for (const row of ids) {
+      deleteVector.run(BigInt(row.id));
+    }
+  } catch {
+    // Vector table may not exist yet; normal relational cleanup still applies.
+  }
+}
+
 function cleanupOrphanSessions(db: Awaited<ReturnType<typeof openDatabase>>): number {
+  try {
+    const orphanChunkIds = db.prepare<[], { id: number }>(`
+      SELECT c.id
+      FROM chunks c
+      JOIN sessions s ON s.id = c.session_id
+      WHERE s.id NOT IN (
+        SELECT DISTINCT session_id
+        FROM session_sources
+      )
+    `).all();
+    const deleteVector = db.prepare<[bigint]>('DELETE FROM chunk_embeddings WHERE chunk_id = ?');
+    for (const row of orphanChunkIds) {
+      deleteVector.run(BigInt(row.id));
+    }
+  } catch {
+    // Vector table may not exist yet.
+  }
+
   const deleteOrphans = db.prepare(`
     DELETE FROM sessions
     WHERE id NOT IN (

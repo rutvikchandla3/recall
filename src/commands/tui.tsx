@@ -22,7 +22,7 @@ export async function runTuiCommand(options: TuiCommandOptions = {}): Promise<vo
   const repoResolver = createRepoResolver();
   const currentCwd = process.cwd();
   const currentRepo = await repoResolver.resolve(currentCwd);
-  const service = createSqliteSearchService(db);
+  const service = createSqliteSearchService(db, { config });
 
   const app = render(
     <BootstrapController

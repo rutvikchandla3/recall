@@ -1,10 +1,12 @@
+import { loadConfig, type RecallConfig } from '../core/config.js';
 import { createSessionsRepo } from '../db/sessions-repo.js';
 import type { SqliteDatabase } from '../db/types.js';
 import type { SearchResult } from '../domain/result.js';
 import { shapeFtsResultRows, buildFtsQueryPlan } from './fts.js';
 import type { FtsResultRow } from './models.js';
-import { shapeBrowseResults, shapeFtsFirstResults } from './service.js';
+import { shapeBrowseResults, shapeFtsFirstResults, shapeHybridResults } from './service.js';
 import type { SearchRequest, SearchService } from './types.js';
+import { searchVectorHits } from './vector.js';
 
 interface SearchRow {
   uid: string;
@@ -30,6 +32,7 @@ interface SearchRow {
 
 export interface SqliteSearchServiceOptions {
   browseLimit?: number;
+  config?: RecallConfig;
 }
 
 export function createSqliteSearchService(
@@ -37,6 +40,12 @@ export function createSqliteSearchService(
   options: SqliteSearchServiceOptions = {},
 ): SearchService {
   const sessionsRepo = createSessionsRepo(db);
+  let configPromise: Promise<RecallConfig> | null = options.config ? Promise.resolve(options.config) : null;
+  function resolveConfig(): Promise<RecallConfig> {
+    configPromise ??= loadConfig();
+    return configPromise;
+  }
+
   const ftsStatement = db.prepare<[string], SearchRow>(`
     SELECT
       s.uid,
@@ -84,7 +93,13 @@ export function createSqliteSearchService(
 
       const rows = ftsStatement.all(queryPlan.matchExpression);
       const hits = shapeFtsResultRows(rows.map(toFtsResultRow));
-      return shapeFtsFirstResults(hits, request);
+      const vectorHits = await searchVectorSafely(db, await resolveConfig(), request.query.freeText);
+
+      if (vectorHits.length === 0) {
+        return shapeFtsFirstResults(hits, request);
+      }
+
+      return shapeHybridResults(hits, vectorHits, request);
     },
 
     async recent(limit: number): Promise<SearchResult[]> {
@@ -103,6 +118,14 @@ export function createSqliteSearchService(
       });
     },
   };
+}
+
+async function searchVectorSafely(db: SqliteDatabase, config: RecallConfig, freeText: string) {
+  try {
+    return await searchVectorHits(db, config, freeText, { limit: 100, candidateLimit: 200 });
+  } catch {
+    return [];
+  }
 }
 
 function toFtsResultRow(row: SearchRow): FtsResultRow {

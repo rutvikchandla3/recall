@@ -59,6 +59,9 @@ On first launch, Recall now:
 - auto-discovers Claude, Codex, and pi session roots
 - starts indexing in the background
 
+Semantic search uses Voyage for embeddings and stores vectors locally with `sqlite-vec`.
+Set `VOYAGE_API_KEY` before running `recall sync` / `recall index`; without it, Recall still indexes chunks and falls back to FTS-only search.
+
 `npm install` itself does **not** scan or index your machine. Indexing starts on first `recall` launch.
 
 ## Commands

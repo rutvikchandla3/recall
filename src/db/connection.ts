@@ -1,6 +1,7 @@
 import { chmod } from 'node:fs/promises';
 import path from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
 import { loadConfig } from '../core/config.js';
 import { ensureDir, resolvePaths } from '../core/paths.js';
 import { runMigrations as runDatabaseMigrations } from './migrate.js';
@@ -49,6 +50,7 @@ export async function openDatabase(options: OpenDatabaseOptions = {}): Promise<S
 
   try {
     applyConnectionPragmas(db, options.busyTimeoutMs ?? 5000, options.readonly === true);
+    tryLoadVectorExtension(db);
 
     if (!options.readonly && options.runMigrations !== false) {
       await runDatabaseMigrations(db, options.schemaDir ? { schemaDir: options.schemaDir } : {});
@@ -79,6 +81,19 @@ export async function withDatabase<T>(
     return await run(db);
   } finally {
     db.close();
+  }
+}
+
+export function loadVectorExtension(db: SqliteDatabase): void {
+  sqliteVec.load(db);
+}
+
+export function tryLoadVectorExtension(db: SqliteDatabase): boolean {
+  try {
+    loadVectorExtension(db);
+    return true;
+  } catch {
+    return false;
   }
 }
 

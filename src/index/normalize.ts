@@ -9,7 +9,7 @@ import { cleanTurns, cleanConversationText, stripFormattingForTitle } from './cl
 
 const UNKNOWN_CWD = '(unknown)';
 export const NORMALIZE_VERSION = 'fts-foundation-v1';
-export const CHUNK_VERSION = 'fts-foundation-v1';
+export const CHUNK_VERSION = 'semantic-chunks-v1';
 
 export interface RepoResolver {
   resolve(cwd: string): Promise<string | null>;

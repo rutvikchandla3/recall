@@ -15,4 +15,5 @@ export async function runIndexCommand(options: IndexCommandOptions = {}): Promis
   });
 
   console.log(`Indexed ${summary.indexed} sessions from ${summary.changed}/${summary.discovered} discovered files (${summary.failed} failures, ${summary.deletedSources} deleted sources, ${summary.deletedSessions} deleted orphan sessions).`);
+  console.log(`Semantic index: ${summary.chunkedSessions} sessions chunked, ${summary.chunks} chunks, ${summary.embeddedChunks} embedded (${summary.reusedEmbeddings} reused, ${summary.embeddingFailures} failures).`);
 }

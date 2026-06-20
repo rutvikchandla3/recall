@@ -15,6 +15,17 @@ export interface ParsedCandidate {
   session: ParsedSession;
 }
 
+export interface ParseProgressEvent {
+  current: number;
+  total: number;
+  provider: ProviderId;
+  path: string;
+}
+
+export interface ParseDiscoveredSessionsOptions {
+  onProgress?: (event: ParseProgressEvent) => void;
+}
+
 export interface IngestSessionsOptions extends DiscoverSessionsOptions, NormalizeSessionOptions {
   adapters?: SessionAdapter[];
 }
@@ -33,23 +44,26 @@ function adapterByProvider(adapters: SessionAdapter[]): Map<ProviderId, SessionA
 export async function parseDiscoveredSessions(
   candidates: DiscoveryCandidate[],
   adapters: SessionAdapter[] = defaultAdapters,
+  options: ParseDiscoveredSessionsOptions = {},
 ): Promise<{ parsed: ParsedSession[]; failures: ParseFailure[] }> {
   const adapterMap = adapterByProvider(adapters);
   const parsed: ParsedSession[] = [];
   const failures: ParseFailure[] = [];
 
+  let processed = 0;
   for (const candidate of candidates) {
     const adapter = adapterMap.get(candidate.provider);
-    if (!adapter) {
-      failures.push({
-        provider: candidate.provider,
-        path: candidate.path,
-        error: `No adapter registered for provider ${candidate.provider}`,
-      });
-      continue;
-    }
 
     try {
+      if (!adapter) {
+        failures.push({
+          provider: candidate.provider,
+          path: candidate.path,
+          error: `No adapter registered for provider ${candidate.provider}`,
+        });
+        continue;
+      }
+
       const result = await adapter.parse(candidate.path);
       if (!result) {
         continue;
@@ -65,6 +79,14 @@ export async function parseDiscoveredSessions(
         provider: candidate.provider,
         path: candidate.path,
         error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      processed += 1;
+      options.onProgress?.({
+        current: processed,
+        total: candidates.length,
+        provider: candidate.provider,
+        path: candidate.path,
       });
     }
   }

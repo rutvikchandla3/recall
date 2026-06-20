@@ -1,7 +1,7 @@
 import { access } from 'node:fs/promises';
 import { defaultAdapters } from '../adapters/index.js';
 import { loadConfig } from '../core/config.js';
-import { openDatabase, closeDatabase, createParseErrorsRepo } from '../db/index.js';
+import { openDatabase, closeDatabase, createParseErrorsRepo, createChunksRepo, ensureVectorTable } from '../db/index.js';
 import { type ProviderId } from '../domain/session.js';
 import { isCommandOnPath } from '../launch/validate.js';
 import { discoverSessions } from '../index/discover.js';
@@ -41,7 +41,10 @@ export async function runDoctorCommand(): Promise<void> {
     const parseErrors = createParseErrorsRepo(db).listRecent(5);
     const sessionCountRow = db.prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM sessions').get();
     const sessionCount = sessionCountRow?.count ?? 0;
+    const chunkCounts = createChunksRepo(db).countByStatus();
     console.log(`- OK opened database · ${sessionCount} indexed sessions`);
+    console.log(`- chunks: ${chunkCounts.total} total · ${chunkCounts.embedded} embedded · ${chunkCounts.pending} pending · ${chunkCounts.failed} failed`);
+    console.log(`- sqlite-vec: ${probeVectorBackend(db, config.embeddings.dimensions)}`);
     if (parseErrors.length > 0) {
       console.log('- recent parse errors:');
       for (const issue of parseErrors) {
@@ -52,6 +55,16 @@ export async function runDoctorCommand(): Promise<void> {
     }
   } finally {
     closeDatabase(db);
+  }
+}
+
+function probeVectorBackend(db: Awaited<ReturnType<typeof openDatabase>>, dimensions: number): string {
+  try {
+    const version = db.prepare<[], { version: string }>('SELECT vec_version() AS version').get()?.version ?? 'unknown';
+    ensureVectorTable(db, dimensions);
+    return `OK ${version} · ${dimensions} dimensions`;
+  } catch (error) {
+    return `WARN unavailable (${error instanceof Error ? error.message : String(error)})`;
   }
 }
 
