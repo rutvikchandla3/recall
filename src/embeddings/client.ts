@@ -1,6 +1,8 @@
 import type { RecallConfig } from '../core/config.js';
 import { OllamaEmbeddingClient, ollamaSetupCommands, type OllamaReadiness } from './ollama.js';
 import { VoyageEmbeddingClient } from './voyage.js';
+import { LlamaCppEmbeddingClient } from './llamacpp.js';
+import { inspectLlamaModel, ftsFallbackReadiness } from './llamacpp-setup.js';
 
 export type EmbeddingInputType = 'document' | 'query';
 
@@ -28,14 +30,24 @@ export function createEmbeddingClient(config: RecallConfig): EmbeddingClient {
       apiKey: config.embeddings.apiKey,
       model: config.embeddings.model,
       dimensions: config.embeddings.dimensions,
-      endpoint: config.embeddings.endpoint,
+      ...(config.embeddings.endpoint !== undefined ? { endpoint: config.embeddings.endpoint } : {}),
     });
   }
 
+  if (config.embeddings.provider === 'llama') {
+    return new LlamaCppEmbeddingClient({
+      model: config.embeddings.model,
+      modelUri: config.embeddings.model,
+      dimensions: config.embeddings.dimensions,
+      gpu: 'auto',
+    });
+  }
+
+  // 'ollama' provider
   return new OllamaEmbeddingClient({
     model: config.embeddings.model,
     dimensions: config.embeddings.dimensions,
-    endpoint: config.embeddings.endpoint,
+    ...(config.embeddings.endpoint !== undefined ? { endpoint: config.embeddings.endpoint } : {}),
   });
 }
 
@@ -51,7 +63,7 @@ export async function checkEmbeddingReadiness(config: RecallConfig): Promise<Emb
         message: 'Voyage embeddings are selected, but VOYAGE_API_KEY is not set.',
         setup: [
           'Set VOYAGE_API_KEY in your environment, or set embeddings.apiKey in ~/.config/recall/config.json.',
-          'Alternatively switch back to local embeddings with embeddings.provider = "local".',
+          'Alternatively switch back to local embeddings with embeddings.provider = "ollama".',
         ],
       };
     }
@@ -59,10 +71,25 @@ export async function checkEmbeddingReadiness(config: RecallConfig): Promise<Emb
     return { ok: true };
   }
 
+  if (config.embeddings.provider === 'llama') {
+    // Strictly non-interactive: stat the cache dir only, never download or prompt
+    const { cached } = await inspectLlamaModel({
+      modelUri: config.embeddings.model,
+      cacheDir: config.paths.modelCacheDir,
+    });
+
+    if (cached) {
+      return { ok: true };
+    }
+
+    return ftsFallbackReadiness(config.embeddings.model, config.paths.modelCacheDir);
+  }
+
+  // 'ollama' provider
   const client = new OllamaEmbeddingClient({
     model: config.embeddings.model,
     dimensions: config.embeddings.dimensions,
-    endpoint: config.embeddings.endpoint,
+    ...(config.embeddings.endpoint !== undefined ? { endpoint: config.embeddings.endpoint } : {}),
   });
   return normalizeReadiness(await client.checkReady());
 }
@@ -76,11 +103,20 @@ export function isEmbeddingConfigured(config: RecallConfig): boolean {
     return Boolean(config.embeddings.apiKey);
   }
 
+  // 'llama' and 'ollama' are always "configured" (model presence handled by readiness)
   return true;
 }
 
 export function embeddingProviderLabel(config: RecallConfig): string {
-  return config.embeddings.provider === 'voyage' ? 'Voyage' : 'local Ollama';
+  if (config.embeddings.provider === 'llama') {
+    return 'local (llama.cpp)';
+  }
+
+  if (config.embeddings.provider === 'voyage') {
+    return 'Voyage';
+  }
+
+  return 'local Ollama';
 }
 
 export function embeddingModelCacheKey(config: RecallConfig): string {
@@ -96,6 +132,10 @@ export function formatEmbeddingSetupHelp(config: RecallConfig): string[] {
       'Set VOYAGE_API_KEY in your environment (or embeddings.apiKey in config).',
       'Use model "voyage-code-3" with dimensions 1024 unless you know you need a different Voyage model.',
     ];
+  }
+
+  if (config.embeddings.provider === 'llama') {
+    return ftsFallbackReadiness(config.embeddings.model, config.paths.modelCacheDir).setup ?? [];
   }
 
   return ollamaSetupCommands(config.embeddings.model);

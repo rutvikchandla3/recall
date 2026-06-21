@@ -22,6 +22,8 @@ export async function runDoctorCommand(): Promise<void> {
   console.log(`- embeddings: ${config.embeddings.enabled ? 'enabled' : 'disabled'} · ${embeddingProviderLabel(config)} · ${config.embeddings.model} · ${config.embeddings.dimensions} dimensions`);
   if (config.embeddings.provider === 'voyage') {
     console.log(`- voyage key: ${config.embeddings.apiKey ? 'present' : 'missing'}`);
+  } else if (config.embeddings.provider === 'llama') {
+    console.log(`- model cache: ${config.paths.modelCacheDir}`);
   } else {
     console.log(`- ollama endpoint: ${config.embeddings.endpoint}`);
   }
@@ -45,8 +47,12 @@ export async function runDoctorCommand(): Promise<void> {
   if (!config.embeddings.enabled) {
     console.log('- disabled in config');
   } else {
-    if (config.embeddings.provider === 'local') {
+    if (config.embeddings.provider === 'ollama') {
       console.log(`- ollama binary: ${isCommandOnPath('ollama') ? 'OK' : 'WARN missing from PATH'}`);
+    } else if (config.embeddings.provider === 'llama') {
+      console.log('- backend: in-process llama.cpp (no daemon)');
+      console.log(`- model cache: ${config.paths.modelCacheDir}`);
+      console.log('- gpu: detected at first sync');
     }
     const readiness = await checkEmbeddingReadiness(config);
     console.log(`- setup: ${readiness.ok ? 'OK ready' : `WARN ${readiness.message ?? 'not ready'}`}`);

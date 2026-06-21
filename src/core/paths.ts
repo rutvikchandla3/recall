@@ -8,6 +8,7 @@ export interface ResolvedPaths {
   dbPath: string;
   configPath: string;
   tempDir: string;
+  modelCacheDir: string;
 }
 
 export function expandHome(input: string): string {
@@ -30,9 +31,18 @@ export function defaultConfigDir(): string {
   return path.join(homedir(), '.config', 'recall');
 }
 
-export function resolvePaths(input?: { dataDir?: string; configDir?: string }): ResolvedPaths {
+export function defaultModelCacheDir(): string {
+  const xdgCache = process.env['XDG_CACHE_HOME'];
+  const cacheBase = xdgCache && xdgCache.trim().length > 0
+    ? xdgCache.trim()
+    : path.join(homedir(), '.cache');
+  return path.join(cacheBase, 'recall', 'models');
+}
+
+export function resolvePaths(input?: { dataDir?: string; configDir?: string; modelCacheDir?: string }): ResolvedPaths {
   const dataDir = expandHome(input?.dataDir ?? defaultDataDir());
   const configDir = expandHome(input?.configDir ?? defaultConfigDir());
+  const modelCacheDir = expandHome(input?.modelCacheDir ?? defaultModelCacheDir());
 
   return {
     dataDir,
@@ -40,6 +50,7 @@ export function resolvePaths(input?: { dataDir?: string; configDir?: string }): 
     dbPath: path.join(dataDir, 'index.db'),
     configPath: path.join(configDir, 'config.json'),
     tempDir: path.join(dataDir, 'tmp'),
+    modelCacheDir,
   };
 }
 

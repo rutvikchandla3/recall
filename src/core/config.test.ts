@@ -14,6 +14,8 @@ const envKeys = [
   'RECALL_EMBEDDINGS_ENDPOINT',
   'VOYAGE_API_KEY',
   'OLLAMA_HOST',
+  'RECALL_MODEL_CACHE_DIR',
+  'XDG_CACHE_HOME',
 ] as const;
 
 const originalEnv = new Map<string, string | undefined>();
@@ -33,11 +35,11 @@ afterEach(() => {
 });
 
 describe('defaultConfig', () => {
-  it('defaults to local Ollama embeddings', () => {
-    expect(defaultConfig.embeddings.provider).toBe('local');
-    expect(defaultConfig.embeddings.model).toBe('embeddinggemma');
+  it('defaults to llama in-process embeddings (fresh-user default)', () => {
+    expect(defaultConfig.embeddings.provider).toBe('llama');
+    expect(defaultConfig.embeddings.model).toBe('hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf');
     expect(defaultConfig.embeddings.dimensions).toBe(768);
-    expect(defaultConfig.embeddings.endpoint).toBe('http://127.0.0.1:11434');
+    expect(defaultConfig.embeddings.endpoint).toBeUndefined();
   });
 });
 
@@ -90,7 +92,7 @@ describe('loadConfig', () => {
     }
   });
 
-  it('allows RECALL_EMBEDDINGS_PROVIDER=local to force local even when VOYAGE_API_KEY exists', async () => {
+  it('maps RECALL_EMBEDDINGS_PROVIDER=local to ollama even when VOYAGE_API_KEY exists', async () => {
     const { configDir, dataDir } = await makeTempConfigDirs();
     try {
       process.env.RECALL_CONFIG_DIR = configDir;
@@ -100,11 +102,171 @@ describe('loadConfig', () => {
 
       const config = await loadConfig();
 
-      expect(config.embeddings.provider).toBe('local');
+      // 'local' is legacy alias for 'ollama'
+      expect(config.embeddings.provider).toBe('ollama');
       expect(config.embeddings.model).toBe('embeddinggemma');
       expect(config.embeddings.apiKey).toBeUndefined();
     } finally {
       await cleanupTempConfigDirs(configDir, dataDir);
+    }
+  });
+});
+
+describe('provider backward compatibility', () => {
+  it('parse({}) => llama provider with hf: model URI, 768 dims, no endpoint', async () => {
+    const { configDir, dataDir } = await makeTempConfigDirs();
+    try {
+      process.env.RECALL_CONFIG_DIR = configDir;
+      process.env.RECALL_DATA_DIR = dataDir;
+      delete process.env.RECALL_EMBEDDINGS_PROVIDER;
+      delete process.env.VOYAGE_API_KEY;
+      delete process.env.RECALL_EMBEDDINGS_API_KEY;
+
+      const config = await loadConfig();
+
+      expect(config.embeddings.provider).toBe('llama');
+      expect(config.embeddings.model).toBe('hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf');
+      expect(config.embeddings.dimensions).toBe(768);
+      expect(config.embeddings.endpoint).toBeUndefined();
+    } finally {
+      await cleanupTempConfigDirs(configDir, dataDir);
+    }
+  });
+
+  it('provider "local" in config file => resolves to "ollama" with Ollama defaults (BACKWARD COMPAT)', async () => {
+    const { configDir, dataDir } = await makeTempConfigDirs();
+    try {
+      await import('node:fs/promises').then(({ mkdir, writeFile }) =>
+        mkdir(configDir, { recursive: true }).then(() =>
+          writeFile(
+            configDir + '/config.json',
+            JSON.stringify({ embeddings: { provider: 'local' } }),
+          ),
+        ),
+      );
+      process.env.RECALL_CONFIG_DIR = configDir;
+      process.env.RECALL_DATA_DIR = dataDir;
+      delete process.env.RECALL_EMBEDDINGS_PROVIDER;
+      delete process.env.VOYAGE_API_KEY;
+      delete process.env.RECALL_EMBEDDINGS_API_KEY;
+
+      const config = await loadConfig();
+
+      expect(config.embeddings.provider).toBe('ollama');
+      expect(config.embeddings.model).toBe('embeddinggemma');
+      expect(config.embeddings.endpoint).toBe('http://127.0.0.1:11434');
+    } finally {
+      await cleanupTempConfigDirs(configDir, dataDir);
+    }
+  });
+
+  it('provider "ollama" in config file => stays "ollama"', async () => {
+    const { configDir, dataDir } = await makeTempConfigDirs();
+    try {
+      await import('node:fs/promises').then(({ mkdir, writeFile }) =>
+        mkdir(configDir, { recursive: true }).then(() =>
+          writeFile(
+            configDir + '/config.json',
+            JSON.stringify({ embeddings: { provider: 'ollama' } }),
+          ),
+        ),
+      );
+      process.env.RECALL_CONFIG_DIR = configDir;
+      process.env.RECALL_DATA_DIR = dataDir;
+      delete process.env.RECALL_EMBEDDINGS_PROVIDER;
+      delete process.env.VOYAGE_API_KEY;
+
+      const config = await loadConfig();
+
+      expect(config.embeddings.provider).toBe('ollama');
+      expect(config.embeddings.model).toBe('embeddinggemma');
+      expect(config.embeddings.endpoint).toBe('http://127.0.0.1:11434');
+    } finally {
+      await cleanupTempConfigDirs(configDir, dataDir);
+    }
+  });
+
+  it('provider "voyage" in config file => stays "voyage"', async () => {
+    const { configDir, dataDir } = await makeTempConfigDirs();
+    try {
+      await import('node:fs/promises').then(({ mkdir, writeFile }) =>
+        mkdir(configDir, { recursive: true }).then(() =>
+          writeFile(
+            configDir + '/config.json',
+            JSON.stringify({ embeddings: { provider: 'voyage', apiKey: 'test-key' } }),
+          ),
+        ),
+      );
+      process.env.RECALL_CONFIG_DIR = configDir;
+      process.env.RECALL_DATA_DIR = dataDir;
+      delete process.env.RECALL_EMBEDDINGS_PROVIDER;
+      delete process.env.VOYAGE_API_KEY;
+
+      const config = await loadConfig();
+
+      expect(config.embeddings.provider).toBe('voyage');
+      expect(config.embeddings.model).toBe('voyage-code-3');
+      expect(config.embeddings.dimensions).toBe(1024);
+    } finally {
+      await cleanupTempConfigDirs(configDir, dataDir);
+    }
+  });
+
+  it('embeddingModelCacheKey for llama provider begins with "llama:"', async () => {
+    const { configDir, dataDir } = await makeTempConfigDirs();
+    try {
+      process.env.RECALL_CONFIG_DIR = configDir;
+      process.env.RECALL_DATA_DIR = dataDir;
+      delete process.env.RECALL_EMBEDDINGS_PROVIDER;
+      delete process.env.VOYAGE_API_KEY;
+      delete process.env.RECALL_EMBEDDINGS_API_KEY;
+
+      const config = await loadConfig();
+      const { embeddingModelCacheKey } = await import('../embeddings/client.js');
+      const cacheKey = embeddingModelCacheKey(config);
+
+      expect(cacheKey.startsWith('llama:')).toBe(true);
+    } finally {
+      await cleanupTempConfigDirs(configDir, dataDir);
+    }
+  });
+});
+
+describe('modelCacheDir resolution', () => {
+  it('defaults to ~/.cache/recall/models when XDG_CACHE_HOME is not set', async () => {
+    const { defaultModelCacheDir } = await import('./paths.js');
+    const { homedir } = await import('node:os');
+    const { join } = await import('node:path');
+
+    const original = process.env['XDG_CACHE_HOME'];
+    delete process.env['XDG_CACHE_HOME'];
+
+    try {
+      const dir = defaultModelCacheDir();
+      expect(dir).toBe(join(homedir(), '.cache', 'recall', 'models'));
+    } finally {
+      if (original !== undefined) {
+        process.env['XDG_CACHE_HOME'] = original;
+      }
+    }
+  });
+
+  it('honors XDG_CACHE_HOME when set', async () => {
+    const { defaultModelCacheDir } = await import('./paths.js');
+    const { join } = await import('node:path');
+
+    const original = process.env['XDG_CACHE_HOME'];
+    process.env['XDG_CACHE_HOME'] = '/custom/xdg/cache';
+
+    try {
+      const dir = defaultModelCacheDir();
+      expect(dir).toBe(join('/custom/xdg/cache', 'recall', 'models'));
+    } finally {
+      if (original !== undefined) {
+        process.env['XDG_CACHE_HOME'] = original;
+      } else {
+        delete process.env['XDG_CACHE_HOME'];
+      }
     }
   });
 });

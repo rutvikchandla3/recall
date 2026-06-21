@@ -5,6 +5,7 @@ import { runConfigCommand } from './commands/config.js';
 import { runDoctorCommand } from './commands/doctor.js';
 import { runIndexCommand } from './commands/index.js';
 import { runSearchCommand } from './commands/search.js';
+import { runSetupCommand } from './commands/setup.js';
 import { runSyncCommand } from './commands/sync.js';
 import { runTuiCommand } from './commands/tui.js';
 
@@ -53,6 +54,26 @@ program
       ...(options.json !== undefined ? { json: options.json } : {}),
       ...(options.limit !== undefined ? { limit: options.limit } : {}),
     });
+  });
+
+program
+  .command('setup')
+  .description('Enable local semantic search (downloads the embedding model on first run)')
+  .option('--yes', 'skip the download confirmation (CI/non-interactive)')
+  .option('--refresh', 're-download even if cached (fixes a corrupt cache)')
+  .option('--json', 'print JSON output')
+  .action(async (opts: { yes?: boolean; refresh?: boolean; json?: boolean }) => {
+    await runSetupCommand(opts);
+  });
+
+program
+  .command('pull')
+  .description('Alias for `recall setup` — download the local embedding model')
+  .option('--yes', 'skip the download confirmation (CI/non-interactive)')
+  .option('--refresh', 're-download even if cached (fixes a corrupt cache)')
+  .option('--json', 'print JSON output')
+  .action(async (opts: { yes?: boolean; refresh?: boolean; json?: boolean }) => {
+    await runSetupCommand(opts);
   });
 
 program

@@ -2,22 +2,30 @@ import { access, chmod, readFile, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { ConfigError } from './errors.js';
 import { getEnv, getEnvBoolean, getEnvInteger } from './env.js';
-import { defaultConfigDir, defaultDataDir, ensureDir, expandHome, resolvePaths } from './paths.js';
+import { defaultConfigDir, defaultDataDir, defaultModelCacheDir, ensureDir, expandHome, resolvePaths } from './paths.js';
 
 const providerSchema = z.object({
   enabled: z.boolean().default(true),
   roots: z.array(z.string()).default([]),
 });
 
+// Preprocess maps legacy 'local' -> 'ollama' and legacy 'ollama' (already canonical) stays 'ollama'.
+// Fresh users (no provider key) get the default 'llama'.
 const embeddingProviderSchema = z.preprocess(
-  (value) => value === 'ollama' ? 'local' : value,
-  z.enum(['local', 'voyage']).default('local'),
+  (value) => value === 'local' ? 'ollama' : value,
+  z.enum(['llama', 'ollama', 'voyage']).default('llama'),
 );
 
 const LOCAL_EMBEDDING_DEFAULTS = {
   model: 'embeddinggemma',
   dimensions: 768,
   endpoint: 'http://127.0.0.1:11434',
+} as const;
+
+const LLAMA_EMBEDDING_DEFAULTS = {
+  model: 'hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf',
+  dimensions: 768,
+  endpoint: undefined,
 } as const;
 
 const VOYAGE_EMBEDDING_DEFAULTS = {
@@ -36,7 +44,14 @@ const embeddingsSchema = z.object({
   apiKey: z.string().min(1).optional(),
   endpoint: z.string().min(1).optional(),
 }).default({}).transform((value) => {
-  const defaults = value.provider === 'voyage' ? VOYAGE_EMBEDDING_DEFAULTS : LOCAL_EMBEDDING_DEFAULTS;
+  let defaults: { model: string; dimensions: number; endpoint: string | undefined };
+  if (value.provider === 'voyage') {
+    defaults = VOYAGE_EMBEDDING_DEFAULTS;
+  } else if (value.provider === 'llama') {
+    defaults = LLAMA_EMBEDDING_DEFAULTS;
+  } else {
+    defaults = LOCAL_EMBEDDING_DEFAULTS;
+  }
   return {
     provider: value.provider,
     model: value.model ?? defaults.model,
@@ -44,7 +59,8 @@ const embeddingsSchema = z.object({
     batchSize: value.batchSize,
     redactBeforeSend: value.redactBeforeSend,
     enabled: value.enabled,
-    endpoint: value.endpoint ?? defaults.endpoint,
+    // For 'llama', keep endpoint undefined even if defaults.endpoint is undefined
+    endpoint: value.provider === 'llama' ? undefined : (value.endpoint ?? defaults.endpoint),
     ...(value.apiKey !== undefined ? { apiKey: value.apiKey } : {}),
   };
 });
@@ -53,6 +69,7 @@ const configSchema = z.object({
   paths: z.object({
     dataDir: z.string().default(defaultDataDir()),
     configDir: z.string().default(defaultConfigDir()),
+    modelCacheDir: z.string().default(defaultModelCacheDir()),
   }),
   providers: z.object({
     claude: providerSchema.default({ enabled: true, roots: ['~/.claude/projects'] }),
@@ -87,12 +104,13 @@ export const defaultConfig: RecallConfig = configSchema.parse({
   launch: {},
 });
 
-function normalizeEmbeddingProvider(value: unknown): 'local' | 'voyage' | undefined {
-  if (value === 'ollama') {
-    return 'local';
+function normalizeEmbeddingProvider(value: unknown): 'llama' | 'ollama' | 'voyage' | undefined {
+  // Legacy 'local' maps to 'ollama'
+  if (value === 'local' || value === 'ollama') {
+    return 'ollama';
   }
 
-  if (value === 'local' || value === 'voyage') {
+  if (value === 'llama' || value === 'voyage') {
     return value;
   }
 
@@ -105,6 +123,7 @@ function normalizeConfig(config: RecallConfig): RecallConfig {
     paths: {
       dataDir: expandHome(config.paths.dataDir),
       configDir: expandHome(config.paths.configDir),
+      modelCacheDir: expandHome(config.paths.modelCacheDir),
     },
     providers: {
       claude: {
@@ -154,7 +173,7 @@ export async function loadConfig(): Promise<RecallConfig> {
     }
   }
 
-  const filePaths = (fileValue.paths ?? {}) as { dataDir?: string; configDir?: string };
+  const filePaths = (fileValue.paths ?? {}) as { dataDir?: string; configDir?: string; modelCacheDir?: string };
   const fileEmbeddings = (fileValue.embeddings ?? {}) as Record<string, unknown> & {
     apiKey?: string;
     enabled?: boolean;
@@ -163,12 +182,16 @@ export async function loadConfig(): Promise<RecallConfig> {
   const providerOverride = getEnv('RECALL_EMBEDDINGS_PROVIDER');
   const voyageApiKeyOverride = getEnv('VOYAGE_API_KEY');
   const genericApiKeyOverride = getEnv('RECALL_EMBEDDINGS_API_KEY');
+  const modelCacheDirOverride = getEnv('RECALL_MODEL_CACHE_DIR');
   const fileEmbeddingProvider = normalizeEmbeddingProvider(fileEmbeddings.provider);
-  const rawEmbeddingProvider = providerOverride
-    ?? (voyageApiKeyOverride || genericApiKeyOverride ? 'voyage' : fileEmbeddingProvider ?? 'local');
+  // normalizeEmbeddingProvider maps 'local' -> 'ollama'; pass through 'llama'/'ollama'/'voyage'
+  const normalizedProviderOverride = providerOverride ? normalizeEmbeddingProvider(providerOverride) : undefined;
+  const rawEmbeddingProvider = normalizedProviderOverride
+    ?? (voyageApiKeyOverride || genericApiKeyOverride ? 'voyage' : fileEmbeddingProvider ?? 'llama');
   const useFileEmbeddingOptions = fileEmbeddingProvider === undefined || fileEmbeddingProvider === normalizeEmbeddingProvider(rawEmbeddingProvider);
+  // OLLAMA_HOST only applies when using Ollama backend (not llama/voyage)
   const embeddingEndpointOverride = getEnv('RECALL_EMBEDDINGS_ENDPOINT')
-    ?? (rawEmbeddingProvider === 'local' || rawEmbeddingProvider === 'ollama' ? getEnv('OLLAMA_HOST') : undefined);
+    ?? (rawEmbeddingProvider === 'ollama' ? getEnv('OLLAMA_HOST') : undefined);
   const embeddingApiKeyOverride = genericApiKeyOverride
     ?? (rawEmbeddingProvider === 'voyage' ? voyageApiKeyOverride : undefined);
 
@@ -177,6 +200,7 @@ export async function loadConfig(): Promise<RecallConfig> {
     paths: {
       dataDir: dataDirOverride ?? filePaths.dataDir,
       configDir: configDirOverride ?? filePaths.configDir,
+      modelCacheDir: modelCacheDirOverride ?? filePaths.modelCacheDir,
     },
     embeddings: {
       ...fileEmbeddings,

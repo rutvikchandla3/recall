@@ -1,20 +1,26 @@
 # Recall Implementation Plan
 
+## Default local embedding backend (v0.2)
+
+In-process `node-llama-cpp` loading embeddinggemma-300M GGUF (provider id `'llama'`), zero external daemon, model auto-downloaded once (~300MB) under `~/.cache/recall/models/`, gated behind an explicit `[Y/n]` confirmation (env `RECALL_AUTO_DOWNLOAD` / `recall setup --yes` for non-interactive). Ollama (provider `'ollama'`, legacy `'local'` alias) and Voyage remain fully supported and existing configs load unchanged. Reuses `formatForEmbedding` QMD prefixes from `src/embeddings/ollama.ts` (no duplication). GPU auto-detect with CPU fallback (warns user on first slow sync). The `[Y/n]` prompt lives only in `recall setup` (alias `recall pull`); `recall doctor` and background sync never download. Decision: NO `postinstall` and NO `scripts/` helper — the in-app gated flow plus `recall setup --yes` cover interactive/CI cases cleanly. Inspired by QMD (github.com/tobi/qmd).
+
+Provider id topology: `z.enum(['llama','ollama','voyage'])`. A `z.preprocess` maps legacy `'local'` to `'ollama'` so existing configs load unchanged. `'llama'` is selected only on key-absence (Zod `.default('llama')` fires only when `embeddings.provider` is `undefined`). Model cache dir: `${XDG_CACHE_HOME:-~/.cache}/recall/models` (configurable via `RECALL_MODEL_CACHE_DIR`). Cache key for llama vectors: `llama:<model-uri>`, namespaced separately from `local:`/`ollama:` vectors so switching providers triggers a clean re-embed automatically.
+
 ## 1. Scope
 
 This document translates `PRD.md` into an implementation-ready plan for a greenfield TypeScript repo.
 
 ### v1 target
 - Local-only indexing of Claude Code, Codex, and pi sessions.
-- Hybrid search: SQLite FTS5 + local Ollama embeddings by default, with optional Voyage embeddings, via `sqlite-vec`.
+- Hybrid search: SQLite FTS5 + local in-process embeddings (llama.cpp) by default, with optional Ollama or Voyage embeddings, via `sqlite-vec`.
 - Ink TUI for live search, ranked results, preview, and copyable resume command.
-- CLI commands: `recall`, `index`, `search`, `sync`, `doctor`, `config`.
+- CLI commands: `recall`, `index`, `search`, `sync`, `doctor`, `config`, `setup` (alias `pull`).
 - Resume behavior is copy-only. No direct process handoff in v1.
 
 ### Assumptions
 - Node 20+.
 - SQLite extension loading is available on the machine.
-- Local Ollama `embeddinggemma` is the default embedding model; `voyage-code-3` is used automatically when `VOYAGE_API_KEY` is present in the environment, unless `RECALL_EMBEDDINGS_PROVIDER=local` forces local.
+- In-process llama.cpp (node-llama-cpp) with embeddinggemma-300M GGUF is the default embedding backend; `voyage-code-3` is used automatically when `VOYAGE_API_KEY` is present in the environment, unless `RECALL_EMBEDDINGS_PROVIDER=llama` (or `ollama`/`local`) forces local.
 - Repo currently has only `PRD.md`, so this plan defines the initial project structure too.
 - Examples below assume `pnpm`, but the implementation is package-manager agnostic.
 
